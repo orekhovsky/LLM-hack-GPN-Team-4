@@ -1,9 +1,12 @@
 import requests
 import pandas as pd
+import json
 
 
 # API ключ от 2GIS
-API_KEY = '29a6ff80-61d7-4d39-aa64-ca112f1377a3'
+with open("2gis-key.json", "r") as file:
+    config = json.load(file)
+API_KEY = config["api_key"]
 
 # Основной URL для API 2GIS
 BASE_URL = 'https://catalog.api.2gis.com/3.0/items'
