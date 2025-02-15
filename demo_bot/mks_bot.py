@@ -108,6 +108,6 @@ def show_results(user_id):
 
 @bot.message_handler(commands=['help'])
 def welcome_help(message):
-    bot.send_message(message.chat.id, 'Чем я могу тебе помочь?')
+    bot.send_message(message.chat.id, 'Чем я могу тебе помочь? 123')
 
 bot.polling()
