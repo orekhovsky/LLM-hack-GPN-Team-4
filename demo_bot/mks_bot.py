@@ -2,8 +2,10 @@ import telebot
 from telebot import types
 import config
 from qstns import questions, cuisines
+from firebase_bd import init_firebase, get_user, save_user, update_user, create_room
 
 bot = telebot.TeleBot(config.token)
+# init_firebase()
 
 # Хранилище состояния пользователей
 user_states = {}
@@ -107,7 +109,18 @@ def show_results(user_id):
     bot.send_message(user_id, result_text, reply_markup=markup)
 
 @bot.message_handler(commands=['help'])
-def welcome_help(message):
-    bot.send_message(message.chat.id, 'Чем я могу тебе помочь? 123')
+def help_command(message):
+    help_text = """
+📌 Доступные команды:
+/start - Начать работу с ботом
+/help - Получить справку
+
+🔍 Возможности:
+- Пройти опрос о кулинарных предпочтениях
+- Создать комнату для совместного выбора
+- Найти рестораны по вашим предпочтениям
+- Управлять своими настройками
+"""
+    bot.send_message(message.chat.id, help_text)
 
 bot.polling()
