@@ -1,99 +1,107 @@
 import telebot
 from telebot import types
+from firebase_bd import init_firebase, get_user, save_user
 import config
 from qstns import questions, cuisines
-from firebase_bd import init_firebase, get_user, save_user, update_user, create_room
+from firebase_admin import db
+import datetime
 
+# Инициализация Firebase
+init_firebase()
 bot = telebot.TeleBot(config.token)
-# init_firebase()
 
-# Хранилище состояния пользователей
+# Хранилище состояния опроса
 user_states = {}
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    markup = types.InlineKeyboardMarkup()
-    btn1 = types.InlineKeyboardButton(text='Можем начинать', callback_data='start_quiz')
-    markup.add(btn1)
-    bot.send_message(
-        message.chat.id,
-        "Приветствую! Я — Dorcia, ваш помощник в выборе ресторанов. Помогаю находить места, которые подойдут вам и вашим коллегам по вкусу. 🍽\n"
-        "Чтобы я мог предложить подходящие варианты, расскажите мне о ваших кулинарных предпочтениях. \n"
-        "Ответьте, пожалуйста, на несколько коротких вопросов.",
-        reply_markup=markup
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith(('start_quiz', 'answer', 'followup')))
-def handle_query(call):
-    user_id = call.message.chat.id
-    data = call.data
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
     
-    if data == 'start_quiz':
-        # Инициализация состояния пользователя
-        user_states[user_id] = {
-            'current_question': 0,
-            'cuisines': {k: 0 for k in cuisines},
-            'follow_up': None
-        }
-        ask_question(user_id)
-    elif data.startswith('answer_'):
-        handle_answer(user_id, data)
-    elif data.startswith('followup_'):
-        handle_followup(user_id, data)
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton(text='Можем начинать', callback_data='start_quiz')
+    markup.add(btn)
+    
+    if user_data:
+        show_main_menu(user_id, user_data)
+    else:
+        bot.send_message(
+            user_id,
+            "Приветствую! Я — Dorcia, ваш помощник в выборе ресторанов. 🍽\n"
+            "Чтобы я мог предложить подходящие варианты, расскажите мне о ваших кулинарных предпочтениях.\n"
+            "Ответьте, пожалуйста, на несколько коротких вопросов.",
+            reply_markup=markup
+        )
 
-def ask_question(user_id, question_num=0):
+def show_main_menu(user_id, user_data):
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("Создать комнату 🏠", callback_data='create_room'),
+        types.InlineKeyboardButton("Найти рестораны 🔍", callback_data='find_restaurants')
+    )
+    
+    text = "Ваши предпочтения:\n" + "\n".join(
+        [f"• {k}: {v} баллов" for k, v in user_data['cuisines'].items() if v > 0]
+    )
+    
+    bot.send_message(user_id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'start_quiz')
+def start_quiz(call):
+    user_id = str(call.message.chat.id)
+    user_states[user_id] = {
+        'current_question': 0,
+        'cuisines': {k: 0 for k in cuisines},
+        'follow_up': None
+    }
+    ask_question(user_id, 0)
+
+def ask_question(user_id, question_num):
     state = user_states[user_id]
     
     if question_num >= len(questions):
         return show_results(user_id)
     
-    if state['follow_up'] is not None:
+    if state['follow_up']:
         q_data = state['follow_up']
         state['follow_up'] = None
     else:
         q_data = questions[question_num]
     
     markup = types.InlineKeyboardMarkup()
-    for key in q_data['options']:
-        btn_text = list(q_data['options'][key].keys())[0]
+    for key, value in q_data['options'].items():
+        btn_text = list(value.keys())[0]
         markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'answer_{question_num}_{key}'))
     
     bot.send_message(user_id, q_data['question'], reply_markup=markup)
 
-def handle_answer(user_id, data):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('answer_'))
+def handle_answer(call):
+    user_id = str(call.message.chat.id)
+    data = call.data.split('_')
+    q_num = int(data[1])
+    answer = data[2]
     state = user_states[user_id]
-    _, q_num, answer = data.split('_')
-    q_num = int(q_num)
-    q_data = questions[q_num]
     
-    # Обновляем баллы
-    selected = list(q_data['options'][answer].values())[0]
+    # Обновление баллов
+    selected = list(questions[q_num]['options'][answer].values())[0]
     for cuisine in selected:
         state['cuisines'][cuisine] += 1
     
-    # Проверяем уточняющий вопрос
-    if 'follow_up' in q_data and answer in q_data['follow_up']:
-        state['follow_up'] = q_data['follow_up'][answer]
+    # Обработка уточняющих вопросов
+    if 'follow_up' in questions[q_num] and answer in questions[q_num]['follow_up']:
+        state['follow_up'] = questions[q_num]['follow_up'][answer]
         ask_question(user_id, q_num)
     else:
         state['current_question'] += 1
         ask_question(user_id, state['current_question'])
 
-def handle_followup(user_id, data):
-    state = user_states[user_id]
-    _, answer = data.split('_')
-    q_data = state['follow_up']
-    
-    # Обновляем баллы
-    selected = list(q_data['options'][answer].values())[0]
-    for cuisine in selected:
-        state['cuisines'][cuisine] += 0.5
-    
-    state['current_question'] += 1
-    ask_question(user_id, state['current_question'])
-
 def show_results(user_id):
     state = user_states[user_id]
+    user_data = {
+        'cuisines': state['cuisines'],
+        'timestamp': datetime.datetime.now().isoformat()  # Локальное время
+    }
     sorted_cuisines = sorted(state['cuisines'].items(), key=lambda x: x[1], reverse=True)
     
     result_text = "🍴 Результаты вашего опроса:\n\n"
@@ -107,6 +115,7 @@ def show_results(user_id):
     markup.add(types.InlineKeyboardButton("Создать комнату 🏠", callback_data='create_room'))
     
     bot.send_message(user_id, result_text, reply_markup=markup)
+    save_user(user_id, user_data)
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
@@ -123,4 +132,6 @@ def help_command(message):
 """
     bot.send_message(message.chat.id, help_text)
 
-bot.polling()
+if __name__ == '__main__':
+    print("Бот успешно запущен!")
+    bot.polling(none_stop=True)
