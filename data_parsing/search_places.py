@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import json
+import time
 
 
 # API ключ от 2GIS
@@ -81,39 +82,63 @@ def extract_place_info(place):
     return info
 
 
-def main():
+def fetch_places_for_category(category, location, radius=2000):
     """
-    Основная функция для выполнения поиска и вывода информации о заведениях.
-    """
-    query = "ресторан"  # Поисковый запрос
-    location = "30.369587,59.940289"  # Координаты точки (долгота и широта)
-    page = 1
+    Функция для получения всех заведений по указанной категории.
 
+    :param category: Категория заведений (например, "ресторан", "кафе")
+    :param location: Координаты точки (долгота, широта)
+    :param radius: Радиус поиска в метрах
+    :return: DataFrame с информацией о заведениях
+    """
+    page = 1
     all_places = []
 
-    while True:  # Чтобы собрать все данные
-        data = search_places(API_KEY, BASE_URL, query, location, page=page)
+    while True:
+        data = search_places(API_KEY, BASE_URL, category, location, radius=radius, page=page)
         if data and data.get("result"):
             places = data["result"].get("items", [])
             all_places.extend(places)
             page += 1
         else:
-            print("Не удалось получить данные или данные отсутствуют.")
+            print(f"Данные для категории '{category}' закончились или отсутствуют.")
             break
 
-    # Создаем пустой датафрейм
+        time.sleep(1)  # Задержка между запросами, чтобы избежать блокировки
+
+    # Создаем DataFrame для текущей категории
     df = pd.DataFrame(
         columns=["name", "address", "coordinates", "rating", "reviews", "categories", "avg_bill", "cuisine",
                  "assortment"])
 
     for place in all_places:
         place_info = extract_place_info(place)
-        # Добавляем информацию о заведении в датафрейм
         df.loc[len(df)] = place_info
 
-    # Сохраняем датафрейм в CSV файл
-    df.to_csv('restaurants.csv', index=False, encoding='utf-8')
-    print("Данные сохранены в файл 'restaurants.csv'")
+    return df
+
+
+def main():
+    """
+    Основная функция для выполнения поиска и вывода информации о заведениях.
+    """
+    categories = ["ресторан", "кафе", "бар", "пиццерия", "кофейня", "фастфуд"]  # Список категорий
+    location = "30.369587,59.940289"  # Координаты точки (долгота и широта)
+    radius = 5000  # Радиус поиска в метрах
+
+    all_dfs = []  # Список для хранения DataFrame по каждой категории
+
+    for category in categories:
+        print(f"Поиск заведений для категории: {category}")
+        df = fetch_places_for_category(category, location, radius)
+        all_dfs.append(df)
+
+    # Объединяем все DataFrame в один
+    final_df = pd.concat(all_dfs, ignore_index=True)
+
+    # Сохраняем итоговый DataFrame в CSV файл
+    final_df.to_csv('all_restaurants.csv', index=False, encoding='utf-8')
+    print("Данные сохранены в файл 'all_restaurants.csv'")
 
 
 if __name__ == "__main__":
