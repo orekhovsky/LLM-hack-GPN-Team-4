@@ -5,5 +5,9 @@ from .db import (
     update_user,
     delete_user,
     create_room,
-    get_room
+    get_room,
+    update_room,
+    delete_room,
+    add_user_to_room,
+    remove_user_from_room
 )

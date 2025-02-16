@@ -79,3 +79,15 @@ questions = [
         },
     },
 ]
+
+
+# Моковые рестораны
+MOCK_RESTAURANTS = [
+    {"name": "Бургере Кинге", "avg_price": 800, "rating": 4.5},
+    {"name": "Мажоре", "avg_price": 1200, "rating": 4.7},
+    {"name": "Бык", "avg_price": 600, "rating": 4.2},
+    {"name": "Рыг", "avg_price": 1500, "rating": 4.8},
+    {"name": "Пиццерия", "avg_price": 900, "rating": 4.4},
+    {"name": "Кайфовый рестик", "avg_price": 700, "rating": 4.1},
+    {"name": "Морж", "avg_price": 1000, "rating": 4.6},
+]
