@@ -3,7 +3,6 @@ from telebot import types
 from firebase_bd import init_firebase, get_user, save_user
 import config
 from qstns import questions, cuisines
-from firebase_admin import db
 import datetime
 
 # Инициализация Firebase
@@ -34,21 +33,45 @@ def welcome(message):
         )
 
 def show_main_menu(user_id, user_data):
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("Создать комнату 🏠", callback_data='create_room'),
-        types.InlineKeyboardButton("Найти рестораны 🔍", callback_data='find_restaurants')
-    )
+    # Изменено: Исправлен тип клавиатуры и callback_data
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = types.KeyboardButton("Создать комнату 🏠")
+    btn2 = types.KeyboardButton('Найти рестораны 🔍')
+    btn3 = types.KeyboardButton('Мои предпочтения 🍽')
+    btn4 = types.KeyboardButton('Присоединиться к комнате 👋🏻')
+    markup.add(btn1, btn2, btn3, btn4)
     
-    text = "Ваши предпочтения:\n" + "\n".join(
-        [f"• {k}: {v} баллов" for k, v in user_data['cuisines'].items() if v > 0]
-    )
-    
+    text = "Главное меню:"
     bot.send_message(user_id, text, reply_markup=markup)
+
+# Добавлено: Обработчик для кнопки "Мои предпочтения"
+@bot.message_handler(func=lambda message: message.text == 'Мои предпочтения 🍽')
+def show_preferences(message):
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    
+    if user_data:
+        sorted_cuisines = sorted(user_data['cuisines'].items(), 
+                               key=lambda x: x[1], 
+                               reverse=True)
+        
+        result_text = "🍴 Ваши текущие предпочтения:\n\n"
+        for cuisine, score in sorted_cuisines:
+            if score > 0:
+                result_text += f"▫️ {cuisine}: {score} баллов\n"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Перейти в меню", callback_data='main_menu'),
+                 types.InlineKeyboardButton("Обновить предпочтения", callback_data='restart_quiz'))
+        
+        bot.send_message(user_id, result_text, reply_markup=markup)
+    else:
+        bot.send_message(user_id, "Вы еще не проходили опрос!")
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_quiz')
 def start_quiz(call):
     user_id = str(call.message.chat.id)
+    # Изменено: Очистка предыдущих данных при повторном прохождении
     user_states[user_id] = {
         'current_question': 0,
         'cuisines': {k: 0 for k in cuisines},
@@ -98,24 +121,44 @@ def handle_answer(call):
 
 def show_results(user_id):
     state = user_states[user_id]
+    # Изменено: Добавлено обновление данных вместо создания новых
     user_data = {
         'cuisines': state['cuisines'],
-        'timestamp': datetime.datetime.now().isoformat()  # Локальное время
+        'timestamp': datetime.datetime.now().isoformat()
     }
-    sorted_cuisines = sorted(state['cuisines'].items(), key=lambda x: x[1], reverse=True)
     
-    result_text = "🍴 Результаты вашего опроса:\n\n"
+    sorted_cuisines = sorted(user_data['cuisines'].items(), 
+                           key=lambda x: x[1], 
+                           reverse=True)
+    
+    result_text = "🍴 Новые результаты опроса:\n\n"
     for cuisine, score in sorted_cuisines:
         if score > 0:
             result_text += f"▫️ {cuisine}: {score} баллов\n"
     
-    result_text += "\nТеперь вы можете создать комнату для выбора ресторана!"
-    
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Создать комнату 🏠", callback_data='create_room'))
+    markup.row(
+        types.InlineKeyboardButton("В главное меню", callback_data='main_menu'),
+        types.InlineKeyboardButton("Пройти заново", callback_data='restart_quiz')
+    )
     
     bot.send_message(user_id, result_text, reply_markup=markup)
-    save_user(user_id, user_data)
+    save_user(user_id, user_data) 
+
+@bot.callback_query_handler(func=lambda call: call.data in ['main_menu', 'restart_quiz'])
+def handle_menu_actions(call):
+    user_id = str(call.message.chat.id)
+    if call.data == 'main_menu':
+        user_data = get_user(user_id)
+        show_main_menu(user_id, user_data)
+    elif call.data == 'restart_quiz':
+        # Очистка предыдущих результатов и запуск опроса
+        user_states[user_id] = {
+            'current_question': 0,
+            'cuisines': {k: 0 for k in cuisines},
+            'follow_up': None
+        }
+        ask_question(user_id, 0)
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
