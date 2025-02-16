@@ -1,262 +1,166 @@
 import telebot
-from telebot import types
-from firebase_bd import init_firebase, get_user, save_user, create_room, get_room, join_room, start_voting, vote_for_restaurant, get_votes, close_voting
-
+import random
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from storage import get_rooms, save_rooms, get_users, save_users
 import config
-from qstns import questions, cuisines
-import datetime
 
-# Инициализация Firebase
-init_firebase()
+
 bot = telebot.TeleBot(config.token)
 
-# Рестораны для голосования (можно заменить API-подбором)
-RESTAURANTS = ["La Piazza", "Sakura Sushi", "Texas BBQ"]
+# 🔥 Три ресторана для голосования
+RESTAURANTS = ["🍣 Sushi Bar", "🍕 Pizza Place", "🥩 Steak House"]
 
-# Хранилище текущих состояний комнат
-user_rooms = {}
+# 📌 Главное меню
+def main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("Создать комнату"), KeyboardButton("Присоединиться к комнате"))
+    return markup
 
-# Хранилище состояния опроса
-user_states = {}
+# 📌 Меню модератора
+def moderator_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("Начать голосование"))
+    return markup
 
-@bot.message_handler(commands=['start'])
-def welcome(message):
-    user_id = str(message.chat.id)
-    user_data = get_user(user_id)
-    
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton(text='Можем начинать', callback_data='start_quiz')
-    markup.add(btn)
-    
-    if user_data and 'cuisines' in user_data and user_data['cuisines']:
-        show_main_menu(user_id, user_data)
-    else:
-        bot.send_message(
-            user_id,
-            "Приветствую! Я — Dorcia, ваш помощник в выборе ресторанов. 🍽\n"
-            "Чтобы я мог предложить подходящие варианты, расскажите мне о ваших кулинарных предпочтениях.\n"
-            "Ответьте, пожалуйста, на несколько коротких вопросов.",
-            reply_markup=markup
-        )
+# 📌 Меню голосования
+def voting_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    for rest in RESTAURANTS:
+        markup.add(KeyboardButton(rest))
+    return markup
 
-def show_main_menu(user_id, user_data):
-    # Изменено: Исправлен тип клавиатуры и callback_data
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton("Создать комнату 🏠")
-    btn2 = types.KeyboardButton('Найти рестораны 🔍')
-    btn3 = types.KeyboardButton('Мои предпочтения 🍽')
-    btn4 = types.KeyboardButton('Присоединиться к комнате 👋🏻')
-    markup.add(btn1, btn2, btn3, btn4)
-    
-    text = "Главное меню:"
-    bot.send_message(user_id, text, reply_markup=markup)
+# 📌 Меню завершения голосования
+def finish_voting_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("Завершить голосование"))
+    return markup
 
-# Добавлено: Обработчик для кнопки "Мои предпочтения"
-@bot.message_handler(func=lambda message: message.text == 'Мои предпочтения 🍽')
-def show_preferences(message):
-    user_id = str(message.chat.id)
-    user_data = get_user(user_id)
-    
-    if user_data:
-        sorted_cuisines = sorted(user_data['cuisines'].items(), 
-                               key=lambda x: x[1], 
-                               reverse=True)
-        
-        result_text = "🍴 Ваши текущие предпочтения:\n\n"
-        for cuisine, score in sorted_cuisines:
-            if score > 0:
-                result_text += f"▫️ {cuisine}: {score} баллов\n"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Перейти в меню", callback_data='main_menu'),
-                 types.InlineKeyboardButton("Обновить предпочтения", callback_data='restart_quiz'))
-        
-        bot.send_message(user_id, result_text, reply_markup=markup)
-    else:
-        bot.send_message(user_id, "Вы еще не проходили опрос!")
+# 📌 Меню закрытия комнаты
+def close_room_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("Закрыть комнату"))
+    return markup
 
-@bot.callback_query_handler(func=lambda call: call.data == 'start_quiz')
-def start_quiz(call):
-    user_id = str(call.message.chat.id)
-    # Изменено: Очистка предыдущих данных при повторном прохождении
-    user_states[user_id] = {
-        'current_question': 0,
-        'cuisines': {k: 0 for k in cuisines},
-        'follow_up': None
-    }
-    ask_question(user_id, 0)
+# 🔥 Обработчик команды /start
+@bot.message_handler(commands=["start"])
+def start_handler(message):
+    bot.send_message(message.chat.id, "👋 Привет! Давай выберем ресторан!", reply_markup=main_menu())
 
-def ask_question(user_id, question_num):
-    state = user_states[user_id]
-    
-    if question_num >= len(questions):
-        return show_results(user_id)
-    
-    if state['follow_up']:
-        q_data = state['follow_up']
-        state['follow_up'] = None
-    else:
-        q_data = questions[question_num]
-    
-    markup = types.InlineKeyboardMarkup()
-    for key, value in q_data['options'].items():
-        btn_text = list(value.keys())[0]
-        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'answer_{question_num}_{key}'))
-    
-    bot.send_message(user_id, q_data['question'], reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('answer_'))
-def handle_answer(call):
-    user_id = str(call.message.chat.id)
-    data = call.data.split('_')
-    q_num = int(data[1])
-    answer = data[2]
-    state = user_states[user_id]
-    
-    # Обновление баллов
-    selected = list(questions[q_num]['options'][answer].values())[0]
-    for cuisine in selected:
-        state['cuisines'][cuisine] += 1
-    
-    # Обработка уточняющих вопросов
-    if 'follow_up' in questions[q_num] and answer in questions[q_num]['follow_up']:
-        state['follow_up'] = questions[q_num]['follow_up'][answer]
-        ask_question(user_id, q_num)
-    else:
-        state['current_question'] += 1
-        ask_question(user_id, state['current_question'])
-
-def show_results(user_id):
-    state = user_states[user_id]
-    # Изменено: Добавлено обновление данных вместо создания новых
-    user_data = {
-        'cuisines': state['cuisines'],
-        'timestamp': datetime.datetime.now().isoformat()
-    }
-    
-    sorted_cuisines = sorted(user_data['cuisines'].items(), 
-                           key=lambda x: x[1], 
-                           reverse=True)
-    
-    result_text = "🍴 Новые результаты опроса:\n\n"
-    for cuisine, score in sorted_cuisines:
-        if score > 0:
-            result_text += f"▫️ {cuisine}: {score} баллов\n"
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("В главное меню", callback_data='main_menu'),
-        types.InlineKeyboardButton("Пройти заново", callback_data='restart_quiz')
-    )
-    
-    bot.send_message(user_id, result_text, reply_markup=markup)
-    save_user(user_id, user_data) 
-
-@bot.callback_query_handler(func=lambda call: call.data in ['main_menu', 'restart_quiz'])
-def handle_menu_actions(call):
-    user_id = str(call.message.chat.id)
-    if call.data == 'main_menu':
-        user_data = get_user(user_id)
-        show_main_menu(user_id, user_data)
-    elif call.data == 'restart_quiz':
-        # Очистка предыдущих результатов и запуск опроса
-        user_states[user_id] = {
-            'current_question': 0,
-            'cuisines': {k: 0 for k in cuisines},
-            'follow_up': None
-        }
-        ask_question(user_id, 0)
-@bot.message_handler(func=lambda message: message.text == "Создать комнату 🏠")
+# 🔥 Создание комнаты
+@bot.message_handler(func=lambda msg: msg.text == "Создать комнату")
 def create_room_handler(message):
-    user_id = str(message.chat.id)
-    room_code = create_room(user_id)
-    user_rooms[user_id] = room_code
+    rooms = get_rooms()
+    users = get_users()
+    
+    room_code = str(random.randint(1000, 9999))
+    rooms[room_code] = {"moderator": message.chat.id, "guests": [], "votes": {}}
+    users[str(message.chat.id)] = {"room": room_code, "role": "moderator"}
+    
+    save_rooms(rooms)
+    save_users(users)
 
-    markup = types.InlineKeyboardMarkup()
-    btn_start = types.InlineKeyboardButton("Начать голосование", callback_data=f"start_voting_{room_code}")
-    markup.add(btn_start)
+    bot.send_message(message.chat.id, f"✅ Комната создана! Код: {room_code}\nОжидаем гостей...", reply_markup=moderator_menu())
 
-    bot.send_message(user_id, f"✅ Ваша комната создана! Код комнаты: *{room_code}*.\nОтправьте его друзьям, чтобы они присоединились.", parse_mode="Markdown", reply_markup=markup)
-
-@bot.message_handler(func=lambda message: message.text == "Присоединиться к комнате 👋🏻")
+# 🔥 Присоединение к комнате
+@bot.message_handler(func=lambda msg: msg.text == "Присоединиться к комнате")
 def join_room_handler(message):
-    msg = bot.send_message(message.chat.id, "Введите 4-значный код комнаты:")
-    bot.register_next_step_handler(msg, process_join_room)
+    bot.send_message(message.chat.id, "🔢 Введите код комнаты:")
 
-def process_join_room(message):
-    user_id = str(message.chat.id)
-    room_code = message.text.strip()
+    @bot.message_handler(func=lambda msg: msg.text.isdigit())
+    def process_room_code(message):
+        rooms = get_rooms()
+        users = get_users()
+        room_code = message.text
 
-    if join_room(user_id, room_code):
-        user_rooms[user_id] = room_code
-        bot.send_message(user_id, f"🎉 Вы успешно присоединились к комнате *{room_code}*! Ждите начала голосования.", parse_mode="Markdown")
-    else:
-        bot.send_message(user_id, "❌ Ошибка! Проверьте код и попробуйте снова.")
+        if room_code not in rooms:
+            bot.send_message(message.chat.id, "❌ Такой комнаты нет! Введите код снова.")
+            return
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("start_voting_"))
-def start_voting_handler(call):
-    user_id = str(call.message.chat.id)
-    room_code = call.data.split("_")[2]
+        rooms[room_code]["guests"].append(message.chat.id)
+        users[str(message.chat.id)] = {"room": room_code, "role": "guest"}
 
-    if user_id in user_rooms and user_rooms[user_id] == room_code:
-        start_voting(room_code)
+        save_rooms(rooms)
+        save_users(users)
 
-        markup = types.InlineKeyboardMarkup()
-        for restaurant in RESTAURANTS:
-            markup.add(types.InlineKeyboardButton(restaurant, callback_data=f"vote_{room_code}_{restaurant}"))
+        bot.send_message(message.chat.id, "✅ Вы присоединились к комнате! Ожидайте начала голосования.")
 
-        bot.send_message(call.message.chat.id, "🍽 Голосование началось! Выберите ресторан:", reply_markup=markup)
-    else:
-        bot.send_message(call.message.chat.id, "❌ Только создатель комнаты может запустить голосование.")
+# 🔥 Начало голосования (только для модератора)
+@bot.message_handler(func=lambda msg: msg.text == "Начать голосование")
+def start_voting_handler(message):
+    users = get_users()
+    user = users.get(str(message.chat.id))
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("vote_"))
-def vote_handler(call):
-    user_id = str(call.message.chat.id)
-    _, room_code, restaurant = call.data.split("_")
+    if user and user["role"] == "moderator":
+        room_code = user["room"]
+        bot.send_message(message.chat.id, "🎉 Голосование началось!", reply_markup=finish_voting_menu())
 
-    vote_for_restaurant(room_code, user_id, restaurant)
-    bot.send_message(user_id, f"✅ Вы проголосовали за *{restaurant}*.", parse_mode="Markdown")
+        rooms = get_rooms()
+        participants = rooms[room_code]["guests"] + [rooms[room_code]["moderator"]]
+        
+        for participant in participants:
+            bot.send_message(participant, "🍽 Выберите ресторан:", reply_markup=voting_menu())
 
-@bot.message_handler(func=lambda message: message.text == "Завершить голосование")
-def end_voting_handler(message):
-    user_id = str(message.chat.id)
-    room_code = user_rooms.get(user_id)
+# 🔥 Голосование
+@bot.message_handler(func=lambda msg: msg.text in RESTAURANTS)
+def vote_handler(message):
+    users = get_users()
+    user = users.get(str(message.chat.id))
 
-    if not room_code:
-        bot.send_message(user_id, "❌ Вы не являетесь модератором комнаты.")
-        return
+    if user:
+        room_code = user["room"]
+        rooms = get_rooms()
+        
+        if room_code in rooms:
+            rooms[room_code]["votes"][message.chat.id] = message.text
+            save_rooms(rooms)
+            bot.send_message(message.chat.id, "✅ Ваш голос сохранён. Ожидайте результатов!")
 
-    votes = get_votes(room_code)
-    close_voting(room_code)
+            # Если это модератор, показать кнопку завершения голосования
+            if user["role"] == "moderator":
+                bot.send_message(message.chat.id, "📝 Вы можете завершить голосование.", reply_markup=finish_voting_menu())
 
-    results = {}
-    for choice in votes.values():
-        results[choice] = results.get(choice, 0) + 1
+# 🔥 Завершение голосования (только для модератора)
+@bot.message_handler(func=lambda msg: msg.text == "Завершить голосование")
+def finish_voting_handler(message):
+    users = get_users()
+    user = users.get(str(message.chat.id))
 
-    sorted_results = sorted(results.items(), key=lambda x: x[1], reverse=True)
-    result_text = "📊 *Результаты голосования:*\n\n"
-    for place, (restaurant, count) in enumerate(sorted_results, 1):
-        result_text += f"{place}. {restaurant} - {count} голос(ов)\n"
+    if user and user["role"] == "moderator":
+        room_code = user["room"]
+        rooms = get_rooms()
 
-    winner = sorted_results[0][0] if sorted_results else "Нет голосов"
-    result_text += f"\n🏆 *Выбран ресторан:* {winner}!"
+        results = {rest: 0 for rest in RESTAURANTS}
+        for vote in rooms[room_code]["votes"].values():
+            results[vote] += 1
 
-    bot.send_message(user_id, result_text, parse_mode="Markdown")
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    help_text = """
-📌 Доступные команды:
-/start - Начать работу с ботом
-/help - Получить справку
+        results_text = "\n".join([f"{r}: {c} голосов" for r, c in results.items()])
 
-🔍 Возможности:
-- Пройти опрос о кулинарных предпочтениях
-- Создать комнату для совместного выбора
-- Найти рестораны по вашим предпочтениям
-- Управлять своими настройками
-"""
-    bot.send_message(message.chat.id, help_text)
+        # Отправляем результаты всем участникам
+        participants = rooms[room_code]["guests"] + [rooms[room_code]["moderator"]]
+        for participant in participants:
+            bot.send_message(participant, f"📊 Итоги голосования:\n{results_text}")
 
-if __name__ == '__main__':
-    print("Бот успешно запущен!")
-    bot.polling(none_stop=True)
+        bot.send_message(message.chat.id, "🔚 Вы можете закрыть комнату.", reply_markup=close_room_menu())
+
+# 🔥 Закрытие комнаты
+@bot.message_handler(func=lambda msg: msg.text == "Закрыть комнату")
+def close_room_handler(message):
+    users = get_users()
+    user = users.get(str(message.chat.id))
+
+    if user and user["role"] == "moderator":
+        room_code = user["room"]
+        rooms = get_rooms()
+
+        # Удаляем комнату
+        del rooms[room_code]
+        save_rooms(rooms)
+
+        # Удаляем всех пользователей из этой комнаты
+        users = {uid: info for uid, info in users.items() if info["room"] != room_code}
+        save_users(users)
+
+        bot.send_message(message.chat.id, "🚪 Комната закрыта!", reply_markup=main_menu())
+
+# 🔥 Запуск бота
+bot.polling(none_stop=True)
