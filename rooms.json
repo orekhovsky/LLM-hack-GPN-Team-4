@@ -21,5 +21,41 @@
             "558255486": "🍕 Pizza Place",
             "566301339": "🥩 Steak House"
         }
+    },
+    "2299": {
+        "moderator": 566301339,
+        "guests": [],
+        "votes": {}
+    },
+    "2099": {
+        "moderator": 566301339,
+        "guests": [
+            757539856
+        ],
+        "votes": {
+            "566301339": "🥩 Steak House",
+            "757539856": "🍕 Pizza Place"
+        }
+    },
+    "9954": {
+        "moderator": 566301339,
+        "guests": [
+            757539856
+        ],
+        "votes": {
+            "757539856": "🥩 Steak House"
+        }
+    },
+    "2812": {
+        "moderator": 566301339,
+        "guests": [
+            558255486
+        ],
+        "votes": {}
+    },
+    "6690": {
+        "moderator": 566301339,
+        "guests": [],
+        "votes": {}
     }
 }

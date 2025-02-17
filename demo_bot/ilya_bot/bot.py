@@ -1,9 +1,8 @@
 import telebot
 import random
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from storage import get_rooms, save_rooms, get_users, save_users
 import config
-
 
 bot = telebot.TeleBot(config.token)
 
@@ -109,11 +108,13 @@ def vote_handler(message):
     if user:
         room_code = user["room"]
         rooms = get_rooms()
-        
+
         if room_code in rooms:
             rooms[room_code]["votes"][message.chat.id] = message.text
             save_rooms(rooms)
-            bot.send_message(message.chat.id, "✅ Ваш голос сохранён. Ожидайте результатов!")
+
+            # Удаляем кнопки у проголосовавшего
+            bot.send_message(message.chat.id, "✅ Ваш голос сохранён. Ожидайте результатов!", reply_markup=ReplyKeyboardRemove())
 
             # Если это модератор, показать кнопку завершения голосования
             if user["role"] == "moderator":
@@ -163,4 +164,6 @@ def close_room_handler(message):
         bot.send_message(message.chat.id, "🚪 Комната закрыта!", reply_markup=main_menu())
 
 # 🔥 Запуск бота
-bot.polling(none_stop=True)
+if __name__ == '__main__':
+    print("✅ Бот запущен!")
+    bot.polling(none_stop=True)

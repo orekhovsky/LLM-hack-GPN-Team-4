@@ -1,6 +1,7 @@
-import random
+# db.py
 import firebase_admin
 from firebase_admin import credentials, db
+import random
 
 def init_firebase():
     try:
@@ -23,41 +24,70 @@ def save_user(user_id: str, data: dict):
     ref.set(data)
     return user_id
 
-def create_room(moderator_id: str):
-    room_code = str(random.randint(1000, 9999))  # Генерация 4-значного кода
-    ref = db.reference(f'/rooms/{room_code}')
-    ref.set({
-        'moderator': moderator_id,
-        'users': {moderator_id: True},  # Добавляем создателя в комнату
-        'votes': {},
-        'is_voting_active': False
-    })
-    return room_code
+def update_user(user_id: str, updates: dict):
+    ref = db.reference(f'/users/{user_id}')
+    ref.update(updates)
 
-def get_room(room_code: str):
-    ref = db.reference(f'/rooms/{room_code}')
+def delete_user(user_id: str):
+    ref = db.reference(f'/users/{user_id}')
+    ref.delete()
+
+def get_room(room_id: str):
+    ref = db.reference(f'/rooms/{room_id}')
     return ref.get()
 
-def join_room(user_id: str, room_code: str):
-    room = get_room(room_code)
-    if room:
-        ref = db.reference(f'/rooms/{room_code}/users')
-        ref.update({user_id: True})
-        return True
-    return False
+def update_room(room_id: str, updates: dict):
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.update(updates)
 
-def start_voting(room_code: str):
-    ref = db.reference(f'/rooms/{room_code}')
-    ref.update({'is_voting_active': True, 'votes': {}})
+def delete_room(room_id: str):
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.delete()
+
+def add_user_to_room(room_id: str, user_id: str):
+    ref = db.reference(f'/rooms/{room_id}/members')
+    ref.update({user_id: True})
+
+def remove_user_from_room(room_id: str, user_id: str):
+    ref = db.reference(f'/rooms/{room_id}/users')
+    users = ref.get() or []
+    if user_id in users:
+        users.remove(user_id)
+        ref.set(users)
+
+def generate_room_code():
+    """Генерация 4-значного кода комнаты"""
+    return str(random.randint(1000, 9999))
+
+def create_room(room_data: dict):
+    """Создание комнаты с 4-значным кодом"""
+    ref = db.reference('/rooms')
     
-def vote_for_restaurant(room_code: str, user_id: str, restaurant: str):
-    ref = db.reference(f'/rooms/{room_code}/votes')
-    ref.update({user_id: restaurant})
+    # Генерация уникального 4-значного кода
+    while True:
+        room_code = generate_room_code()
+        if not ref.child(room_code).get():  # Проверяем, что код уникален
+            break
+    
+    room_code = generate_room_code()
+    room_data["members"] = [room_data["moderator"]]  # Добавляем модератора в участники
+    ref.child(room_code).set(room_data)
+    return room_code
 
-def get_votes(room_code: str):
-    ref = db.reference(f'/rooms/{room_code}/votes')
-    return ref.get() or {}
-
-def close_voting(room_code: str):
-    ref = db.reference(f'/rooms/{room_code}')
-    ref.update({'is_voting_active': False})
+def update_room_votes(room_id: str, rest: str, user_id: str):
+    ref = db.reference(f'/rooms/{room_id}')
+    room = ref.get() or {}
+    
+    # Обновляем голоса
+    votes = room.get('votes', {})
+    votes[rest] = votes.get(rest, 0) + 1
+    
+    # Обновляем список проголосовавших
+    voted = room.get('voted', [])
+    if user_id not in voted:
+        voted.append(user_id)
+    
+    ref.update({
+        'votes': votes,
+        'voted': voted
+    })

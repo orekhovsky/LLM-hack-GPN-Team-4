@@ -2,11 +2,12 @@ from .db import (
     init_firebase,
     get_user,
     save_user,
+    update_user,
+    delete_user,
     create_room,
     get_room,
-    join_room,  # Добавлено
-    start_voting,  # Добавлено
-    vote_for_restaurant,  # Добавлено
-    get_votes,  # Добавлено
-    close_voting  # Добавлено
+    update_room,
+    delete_room,
+    add_user_to_room,
+    remove_user_from_room
 )
