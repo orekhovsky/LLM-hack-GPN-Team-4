@@ -29,7 +29,7 @@ def search_places(api_key, base_url, query, location, radius=2000, page=1):
         'q': query,
         'point': location,
         'radius': radius,
-        'fields': 'items.point,items.address,items.rubrics,items.reviews,items.context',
+        'fields': 'items.point,items.address,items.rubrics,items.reviews,items.context,items.external_content',
         'key': api_key,
         'page': page
     }
@@ -67,6 +67,15 @@ def extract_place_info(place):
     assortment_dicts = [item for item in stop_factors if
                         isinstance(item, dict) and 'food_service_assortment' in item.get('tag', '')]
 
+    # Извлекаем ссылки на фото из external_content
+    external_content = place.get('external_content', [])
+    photos = []
+
+    # Проверяем, что external_content не пуст
+    if external_content:
+        for content in external_content:
+            photos.append(content.get('main_photo_url'))
+
     # Формируем информацию о заведении
     info = {
         "name": place.get('name'),
@@ -78,6 +87,7 @@ def extract_place_info(place):
         "avg_bill": avg_price_dict.get('name') if avg_price_dict else None,
         "cuisine": [cuisine.get('name') for cuisine in cuisine_dicts if cuisine.get('name')],
         "assortment": [assortment.get('name') for assortment in assortment_dicts if assortment.get('name')],
+        "photo_url": photos
     }
     return info
 
@@ -109,7 +119,7 @@ def fetch_places_for_category(category, location, radius=2000):
     # Создаем DataFrame для текущей категории
     df = pd.DataFrame(
         columns=["name", "address", "coordinates", "rating", "reviews", "categories", "avg_bill", "cuisine",
-                 "assortment"])
+                 "assortment", "photo_url"])
 
     for place in all_places:
         place_info = extract_place_info(place)
@@ -122,9 +132,11 @@ def main():
     """
     Основная функция для выполнения поиска и вывода информации о заведениях.
     """
-    categories = ["ресторан", "кафе", "бар", "пиццерия", "кофейня", "фастфуд"]  # Список категорий
+    categories = ["ресторан", "кафе", "бар", "пиццерия", "кофейни", "фастфуд", "банкетный зал", "быстрое питание",
+                  "пекарня", "фудмоллы", "столовая", "буфет", "суши-бар", "шашлычная", "бургерная", "кондитерская",
+                  "чайная", "паб", "кейтеринг", "фуд-корт", "кулинария", "караоке-бар", "стейк-хаус"]  # Список категорий
     location = "30.369587,59.940289"  # Координаты точки (долгота и широта)
-    radius = 5000  # Радиус поиска в метрах
+    radius = 1500  # Радиус поиска в метрах
 
     all_dfs = []  # Список для хранения DataFrame по каждой категории
 
