@@ -196,73 +196,79 @@ def handle_menu_actions(call):
 
 @bot.message_handler(func=lambda message: message.text == 'Найти рестораны 🔍')
 def handle_solo_search(message):
-    """Новая функция: запуск одиночного поиска"""
+    """Запуск одиночного поиска"""
     user_id = str(message.chat.id)
     user_states[user_id] = {'mode': 'solo', 'step': 'price'}
     ask_price_step(user_id)
 
 def ask_price_step(user_id):
     """Запрос ценового диапазона"""
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('До 500 ₽', '500-1000 ₽', 'Свыше 1000 ₽')
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    price_options = {'До 500 ₽': (0, 500), '500-1000 ₽': (501, 1000), 'Свыше 1000 ₽': (1001, 5000)}
+    
+    for option in price_options:
+        markup.add(option)
+    
+    user_states[user_id]['price_options'] = price_options  # Сохраняем варианты, чтобы избежать ошибок
     bot.send_message(user_id, "💸 Средний чек на человека:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'price')
 def process_solo_price(message):
-    """Обработка цены для одиночного поиска"""
+    """Обработка ценового диапазона"""
     user_id = str(message.chat.id)
-    price_map = {
-        'До 500 ₽': (0, 500),
-        '500-1000 ₽': (501, 1000),
-        'Свыше 1000 ₽': (1001, 5000)
-    }
-    
-    if message.text not in price_map:
+    price_options = user_states[user_id].get('price_options', {})
+
+    if message.text not in price_options:
         bot.send_message(user_id, "❌ Выберите вариант из кнопок!")
         return ask_price_step(user_id)
-    
-    user_states[user_id]['price'] = price_map[message.text]
+
+    user_states[user_id]['price'] = price_options[message.text]
     user_states[user_id]['step'] = 'time'
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add('<30 мин', '30-60 мин', '>1 часа')
     bot.send_message(user_id, "⏳ Время на обед:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'time')
 def process_solo_time(message):
-    """Обработка времени для одиночного поиска"""
+    """Обработка времени на обед"""
     user_id = str(message.chat.id)
-    if message.text not in ['<30 мин', '30-60 мин', '>1 часа']:
+    valid_options = ['<30 мин', '30-60 мин', '>1 часа']
+
+    if message.text not in valid_options:
         bot.send_message(user_id, "❌ Выберите вариант из кнопок!")
         return
     
     user_states[user_id]['time'] = message.text
     user_states[user_id]['step'] = 'cuisine'
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add('Итальянская', 'Японская', 'Кафе', 'Ресторан', 'Пиццерия', 'Другое')
     bot.send_message(user_id, "🍽 Предпочтения по кухне/типу:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'cuisine')
 def process_solo_cuisine(message):
-    """Обработка кухни и вывод результатов"""
+    """Обработка выбора кухни и вывод результатов"""
     user_id = str(message.chat.id)
-    cuisine = message.text
-    filters = user_states[user_id]
-    
-    # Фильтрация ресторанов
-    filtered = [
-        r for r in MOCK_RESTAURANTS 
-        if filters['price'][0] <= r['avg_price'] <= filters['price'][1]
-    ]
-    
+    cuisine = message.text.strip()
+
+    filters = user_states.get(user_id, {})
+    price_range = filters.get('price')
+
+    if not price_range or not isinstance(price_range, tuple):
+        bot.send_message(user_id, "❌ Произошла ошибка, попробуйте ещё раз.")
+        return handle_solo_search(message)
+
+    # Фильтрация ресторанов по цене
+    filtered = [r for r in MOCK_RESTAURANTS if price_range[0] <= r['avg_price'] <= price_range[1]]
+
     if cuisine != 'Другое':
         filtered = [r for r in filtered if cuisine.lower() in r['name'].lower()]
-    
+
     if not filtered:
-        bot.send_message(user_id, "😞 По вашему запросу ничего не найдено")
+        bot.send_message(user_id, "😞 По вашему запросу ничего не найдено.")
         return
-    
+
     # Формирование сообщения с результатами
     response = "🍴 Найденные рестораны:\n\n"
     for i, rest in enumerate(filtered[:5], 1):
@@ -271,9 +277,8 @@ def process_solo_cuisine(message):
             f"   Средний чек: {rest['avg_price']} ₽\n"
             f"   Рейтинг: {rest['rating']} ★\n\n"
         )
-    
-    bot.send_message(user_id, response)
 
+    bot.send_message(user_id, response)
 
 # ------------------------ ЛОГИКА КОМНАТ ---------------------------
 @bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
