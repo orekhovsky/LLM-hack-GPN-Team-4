@@ -271,6 +271,7 @@ def process_solo_cuisine(message):
     
     bot.send_message(user_id, response)
 
+
 # ------------------------ ЛОГИКА КОМНАТ ---------------------------
 
 @bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
@@ -279,26 +280,34 @@ def handle_create_room(message):
     user_id = str(message.chat.id)
     
     # Генерация уникального кода комнаты
-    while True:
+    room_code = str(random.randint(1000, 9999))
+    while get_room(room_code):
         room_code = str(random.randint(1000, 9999))
-        if not get_room(room_code):
-            break
     
     # Создаем комнату в Firebase
     room_data = {
-        'room_id': room_code,
         'moderator': user_id,
         'members': {user_id: True},
         'status': 'waiting',
         'votes': {},
-        'restaurants': [r['name'] for r in MOCK_RESTAURANTS]
+        'restaurants': [r['name'] for r in MOCK_RESTAURANTS],
+        'created_at': datetime.datetime.now().isoformat()
     }
     
     create_room(room_data, room_code)
     update_user(user_id, {'current_room': room_code})
     
-    bot.send_message(user_id, f"✅ Комната создана! Код для участников: *{room_code}*", 
-                    parse_mode="Markdown")
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Начать голосование", callback_data='start_voting'))
+    
+    bot.send_message(
+        user_id, 
+        f"✅ Комната *{room_code}* создана!\n\n"
+        "Участники могут присоединиться с помощью кода.\n"
+        "Нажмите кнопку ниже чтобы начать голосование.",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
 
 @bot.message_handler(func=lambda message: message.text == 'Присоединиться к комнате 👋🏻')
 def join_room_command(message):
@@ -311,49 +320,57 @@ def process_room_code(message):
     """Обработка кода комнаты"""
     user_id = str(message.chat.id)
     room_id = message.text.strip()
-    
+
+    if not room_id.isdigit() or len(room_id) != 4:
+        return bot.send_message(user_id, "❌ Неверный формат кода!")
+
     try:
-        # Проверка комнаты
         room = get_room(room_id)
         if not room:
-            bot.send_message(user_id, "❌ Комната не найдена!")
-            return
+            return bot.send_message(user_id, "❌ Комната не найдена!")
         
-        # Проверка, что пользователь уже не в комнате
         if user_id in room.get('members', {}):
-            bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
-            return
+            return bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
         
+        if room.get('status') != 'waiting':
+            return bot.send_message(user_id, "❌ Голосование уже началось!")
+
         # Добавляем пользователя в комнату
         add_user_to_room(room_id, user_id)
         update_user(user_id, {'current_room': room_id})
         
+        # Уведомляем модератора
+        moderator_id = room['moderator']
+        bot.send_message(
+            moderator_id,
+            f"✅ Пользователь @{message.from_user.username} присоединился к комнате!"
+        )
+        
         bot.send_message(user_id, f"✅ Вы присоединились к комнате {room_id}!")
     except Exception as e:
+        print(f"Ошибка присоединения: {e}")
         bot.send_message(user_id, "❌ Ошибка при присоединении. Попробуйте позже.")
-        print(f"Ошибка: {e}")
 
-def is_moderator(message):
-    room = get_room(str(message.chat.id))
-    return room.get('moderator') == str(message.from_user.id)
-
-@bot.message_handler(func=lambda msg: msg.text == "Начать голосование")
-def start_voting_handler(message):
+@bot.callback_query_handler(func=lambda call: call.data == 'start_voting')
+def start_voting_handler(call):
     """Запуск голосования"""
-    user_id = str(message.chat.id)
-    user_data = get_user(user_id)   
+    user_id = str(call.message.chat.id)
+    user_data = get_user(user_id)
     room_id = user_data.get('current_room')
     
     if not room_id:
-        bot.send_message(user_id, "❌ Вы не в комнате!")
-        return
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room['moderator'] != user_id:
+        return bot.send_message(user_id, "❌ Только модератор может начать голосование!")
     
     # Обновляем статус комнаты
-    update_room(room_id, {'status': 'voting'})
+    update_room(room_id, {'status': 'voting', 'votes': {}})
     
     # Рассылаем интерфейс голосования
-    room = get_room(room_id)
-    for member_id in room.get('members', {}).keys():
+    members = room.get('members', {}).keys()
+    for member_id in members:
         try:
             send_voting_interface(member_id, room_id)
         except Exception as e:
@@ -365,17 +382,19 @@ def send_voting_interface(user_id: str, room_id: str):
     if not room:
         return
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     for rest in room.get('restaurants', []):
         markup.add(types.KeyboardButton(rest))
+    markup.add(types.KeyboardButton("Завершить голосование ❌"))
     
-    bot.send_message(user_id, "🍽 Выберите ресторан:", reply_markup=markup)
+    bot.send_message(
+        user_id, 
+        "🗳 *Голосование началось!*\nВыберите ресторан из списка:",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
-@bot.message_handler(func=lambda message: (
-    str(message.chat.id) in get_room().get('members', {}) and
-    get_room().get('members', {}).get(str(message.chat.id), '') in ['moderator', 'guest'] and
-    message.text in [r['name'] for r in MOCK_RESTAURANTS]
-))
+@bot.message_handler(func=lambda message: message.text in MOCK_RESTAURANTS)
 def vote_handler(message):
     """Обработка голосования"""
     user_id = str(message.chat.id)
@@ -383,28 +402,20 @@ def vote_handler(message):
     room_id = user_data.get('current_room')
     
     if not room_id:
-        bot.send_message(user_id, "❌ Вы не в комнате!")
-        return
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room['status'] != 'voting':
+        return bot.send_message(user_id, "❌ Голосование не активно!")
     
     # Обновляем голоса в Firebase
-    room = get_room(room_id)
     votes = room.get('votes', {})
     votes[user_id] = message.text
     update_room(room_id, {'votes': votes})
     
-    bot.send_message(user_id, "✅ Ваш голос учтен!", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(user_id, "✅ Ваш голос учтен!")
 
-@bot.message_handler(func=lambda message: (
-    str(message.chat.id) in get_room().get('members', {}) and
-    get_room().get('moderator') == str(message.chat.id) and
-    message.text == 'Завершить голосование'
-))
-# 📌 Меню закрытия комнаты
-def close_room_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton("Закрыть комнату"))
-    return markup
-
+@bot.message_handler(func=lambda message: message.text == "Завершить голосование ❌")
 def finish_voting_handler(message):
     """Завершение голосования"""
     user_id = str(message.chat.id)
@@ -412,57 +423,66 @@ def finish_voting_handler(message):
     room_id = user_data.get('current_room')
     
     if not room_id:
-        bot.send_message(user_id, "❌ Вы не в комнате!")
-        return
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room['moderator'] != user_id:
+        return bot.send_message(user_id, "❌ Только модератор может завершить голосование!")
     
     # Подсчет результатов
-    room = get_room(room_id)
     votes = room.get('votes', {})
-    
     results = defaultdict(int)
     for rest in votes.values():
         results[rest] += 1
     
     # Формируем текст результатов
-    result_text = "📊 Результаты голосования:\n\n"
-    for rest, count in results.items():
-        result_text += f"{rest}: {count} голосов\n"
+    result_text = "📊 *Результаты голосования:*\n\n"
+    for rest, count in sorted(results.items(), key=lambda x: x[1], reverse=True):
+        result_text += f"🍽 *{rest}* — {count} голосов\n"
     
     # Рассылаем результаты
-    for member_id in room.get('members', {}).keys():
+    members = room.get('members', {}).keys()
+    for member_id in members:
         try:
-            bot.send_message(member_id, result_text)
+            bot.send_message(
+                member_id, 
+                result_text + "\nКомната автоматически закрывается через 2 минуты.",
+                parse_mode="Markdown"
+            )
         except Exception as e:
             print(f"Ошибка отправки для {member_id}: {e}")
     
-    # Предлагаем модератору закрыть комнату
-    bot.send_message(user_id, "Вы можете закрыть комнату.", reply_markup=close_room_menu())
+    # Закрываем комнату через 2 минуты
+    close_room_with_delay(room_id)
 
-@bot.message_handler(func=lambda message: (
-    str(message.chat.id) in get_room().get('members', {}) and
-    get_room().get('moderator') == str(message.chat.id) and
-    message.text == 'Закрыть комнату'
-))
-def close_room_handler(message):
-    """Закрытие комнаты"""
-    user_id = str(message.chat.id)
-    user_data = get_user(user_id)
-    room_id = user_data.get('current_room')
+def close_room_with_delay(room_id: str):
+    """Закрытие комнаты с задержкой"""
+    import threading
+    from time import sleep
     
-    if not room_id:
-        bot.send_message(user_id, "❌ Вы не в комнате!")
-        return
+    def closer():
+        sleep(120)
+        room = get_room(room_id)
+        if not room:
+            return
+        
+        # Удаляем комнату
+        delete_room(room_id)
+        
+        # Удаляем привязку к комнате у пользователей
+        members = room.get('members', {}).keys()
+        for member_id in members:
+            update_user(member_id, {'current_room': None})
+        
+        # Уведомляем участников
+        for member_id in members:
+            try:
+                bot.send_message(member_id, "🚪 Комната автоматически закрыта!")
+            except Exception as e:
+                print(f"Ошибка уведомления {member_id}: {e}")
     
-    # Удаляем комнату
-    delete_room(room_id)
-    
-    # Удаляем привязку к комнате у пользователей
-    room = get_room(room_id)
-    for member_id in room.get('members', {}).keys():
-        update_user(member_id, {'current_room': None})
-    
-    bot.send_message(user_id, "🚪 Комната закрыта!", reply_markup=show_main_menu())
-
+    thread = threading.Thread(target=closer)
+    thread.start()
 # ------------------------ ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ------------------------
 
 

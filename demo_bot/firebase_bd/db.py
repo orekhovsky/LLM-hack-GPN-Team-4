@@ -49,12 +49,13 @@ def add_user_to_room(room_id: str, user_id: str):
     ref.update({user_id: True})
 
 def remove_user_from_room(room_id: str, user_id: str):
-    ref = db.reference(f'/rooms/{room_id}/users')
-    users = ref.get() or []
-    if user_id in users:
-        users.remove(user_id)
-        ref.set(users)
-        
+    ref = db.reference(f'/rooms/{room_id}/members/{user_id}')
+    ref.delete()
+
+def update_room_votes(room_id: str, votes: dict):
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.update({'votes': votes})
+
 def generate_room_code():
     """Генерация 4-значного кода комнаты"""
     return str(random.randint(1000, 9999))
@@ -70,23 +71,23 @@ def create_room(room_data: dict, room_code):
     
     return room_code
 
-def update_room_votes(room_id: str, rest: str, user_id: str):
-    ref = db.reference(f'/rooms/{room_id}')
-    room = ref.get() or {}
+# def update_room_votes(room_id: str, rest: str, user_id: str):
+#     ref = db.reference(f'/rooms/{room_id}')
+#     room = ref.get() or {}
     
-    # Обновляем голоса
-    votes = room.get('votes', {})
-    votes[rest] = votes.get(rest, 0) + 1
+#     # Обновляем голоса
+#     votes = room.get('votes', {})
+#     votes[rest] = votes.get(rest, 0) + 1
     
-    # Обновляем список проголосовавших
-    voted = room.get('voted', [])
-    if user_id not in voted:
-        voted.append(user_id)
+#     # Обновляем список проголосовавших
+#     voted = room.get('voted', [])
+#     if user_id not in voted:
+#         voted.append(user_id)
     
-    ref.update({
-        'votes': votes,
-        'voted': voted
-    })
+#     ref.update({
+#         'votes': votes,
+#         'voted': voted
+#     })
 
 
 if __name__ == '__main__':
