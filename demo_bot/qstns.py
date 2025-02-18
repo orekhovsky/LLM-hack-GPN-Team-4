@@ -114,13 +114,112 @@ questions = [
     },
 ]
 
-# Моковые рестораны
-MOCK_RESTAURANTS = [
-    {"name": "Бургере Кинге", "avg_price": 800, "rating": 4.5},
-    {"name": "Мажоре", "avg_price": 1200, "rating": 4.7},
-    {"name": "Бык", "avg_price": 600, "rating": 4.2},
-    {"name": "Рыг", "avg_price": 1500, "rating": 4.8},
-    {"name": "Пиццерия", "avg_price": 900, "rating": 4.4},
-    {"name": "Кайфовый рестик", "avg_price": 700, "rating": 4.1},
-    {"name": "Морж", "avg_price": 1000, "rating": 4.6},
-]
+MOCK_RESTAURANTS = {
+    1: {
+        'name': 'La Piazza Italia',
+        'rating': 4.8,
+        'avg_price': 2500,
+        'cuisine': 'Итальянская',
+        'route_duration': 12
+    },
+    2: {
+        'name': 'Tokyo Sushi Master',
+        'rating': 4.7,
+        'avg_price': 1800,
+        'cuisine': 'Японская',
+        'route_duration': 18
+    },
+    3: {
+        'name': 'Le French Café',
+        'rating': 4.9,
+        'avg_price': 3200,
+        'cuisine': 'Французская',
+        'route_duration': 25
+    },
+    4: {
+        'name': 'Burger & Craft Beer',
+        'rating': 4.5,
+        'avg_price': 900,
+        'cuisine': 'Американская',
+        'route_duration': 8
+    },
+    5: {
+        'name': 'El Diablo Mexicano',
+        'rating': 4.6,
+        'avg_price': 1500,
+        'cuisine': 'Мексиканская',
+        'route_duration': 22
+    },
+    6: {
+        'name': 'Green Garden',
+        'rating': 4.4,
+        'avg_price': 1300,
+        'cuisine': 'Веганская',
+        'route_duration': 15
+    },
+    7: {
+        'name': 'Тбилиси',
+        'rating': 4.8,
+        'avg_price': 2000,
+        'cuisine': 'Грузинская',
+        'route_duration': 20
+    },
+    8: {
+        'name': 'Wok Street',
+        'rating': 4.3,
+        'avg_price': 1100,
+        'cuisine': 'Китайская',
+        'route_duration': 10
+    },
+    9: {
+        'name': 'Istanbul Kebab',
+        'rating': 4.7,
+        'avg_price': 800,
+        'cuisine': 'Турецкая',
+        'route_duration': 14
+    },
+    10: {
+        'name': 'Nordic Seafood',
+        'rating': 4.9,
+        'avg_price': 4500,
+        'cuisine': 'Скандинавская',
+        'route_duration': 30
+    },
+    11: {
+        'name': 'Curry Palace',
+        'rating': 4.6,
+        'avg_price': 1700,
+        'cuisine': 'Индийская',
+        'route_duration': 19
+    },
+    12: {
+        'name': 'Peperoni Pizza',
+        'rating': 4.5,
+        'avg_price': 1200,
+        'cuisine': 'Пицца',
+        'route_duration': 9
+    },
+    13: {
+        'name': 'Bavarian Haus',
+        'rating': 4.7,
+        'avg_price': 2200,
+        'cuisine': 'Немецкая',
+        'route_duration': 27
+    },
+    14: {
+        'name': 'Seoul Kitchen',
+        'rating': 4.8,
+        'avg_price': 1900,
+        'cuisine': 'Корейская',
+        'route_duration': 21
+    },
+    15: {
+        'name': 'Mama Mia Trattoria',
+        'rating': 4.4,
+        'avg_price': 2800,
+        'cuisine': 'Итальянская',
+        'route_duration': 24
+    }
+}
+
+# time - средний время
