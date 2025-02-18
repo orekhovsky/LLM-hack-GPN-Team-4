@@ -44,9 +44,11 @@ def welcome(message):
 def show_main_menu(user_id, user_data):
     """Отображение главного меню"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = types.KeyboardButton('Создать комнату 🏠')
     btn2 = types.KeyboardButton('Найти рестораны 🔍')
     btn3 = types.KeyboardButton('Мои предпочтения 🍽')
-    markup.add( btn2, btn3)
+    btn4 = types.KeyboardButton('Присоединиться к комнате 👋🏻')
+    markup.add(btn1, btn2, btn3, btn4)
     
     text = ''' Как здорово снова встретиться с вами! Я — *Dorcia*, ваш помощник в выборе ресторанов. 🍽
 
@@ -271,6 +273,297 @@ def process_solo_cuisine(message):
         )
     
     bot.send_message(user_id, response)
+
+
+# ------------------------ ЛОГИКА КОМНАТ ---------------------------
+
+# ------------------------ ЛОГИКА КОМНАТ ---------------------------
+@bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
+def handle_create_room(message):
+    """Создание комнаты"""
+    user_id = str(message.chat.id)
+    
+    # Генерация уникального кода комнаты
+    room_code = str(random.randint(1000, 9999))
+    while get_room(room_code):
+        room_code = str(random.randint(1000, 9999))
+    
+    # Создаем комнату в Firebase
+    room_data = {
+        'moderator': user_id,
+        'members': {user_id: True},
+        'status': 'waiting',
+        'votes': {},
+        'restaurants': [r['name'] for r in MOCK_RESTAURANTS],
+        'created_at': datetime.datetime.now().isoformat()
+    }
+    
+    create_room(room_data, room_code)
+    update_user(user_id, {'current_room': room_code})
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Начать голосование", callback_data='start_voting'))
+    
+    bot.send_message(
+        user_id, 
+        f"✅ Комната *{room_code}* создана!\n\n"
+        "Участники могут присоединиться с помощью кода.\n"
+        "Нажмите кнопку ниже чтобы начать голосование.",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.message_handler(func=lambda message: message.text == 'Присоединиться к комнате 👋🏻')
+def join_room_command(message):
+    """Присоединение к комнате"""
+    user_id = str(message.chat.id)
+    bot.send_message(user_id, "Введите 4-значный код комнаты:")
+    bot.register_next_step_handler(message, process_room_code)
+
+def process_room_code(message):
+    """Обработка кода комнаты"""
+    user_id = str(message.chat.id)
+    room_id = message.text.strip()
+
+    if not room_id.isdigit() or len(room_id) != 4:
+        return bot.send_message(user_id, "❌ Неверный формат кода!")
+
+    try:
+        room = get_room(room_id)
+        if not room:
+            return bot.send_message(user_id, "❌ Комната не найдена!")
+        
+        if user_id in room.get('members', {}):
+            return bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
+        
+        if room.get('status') != 'waiting':
+            return bot.send_message(user_id, "❌ Голосование уже началось!")
+
+        # Добавляем пользователя в комнату
+        add_user_to_room(room_id, user_id)
+        update_user(user_id, {'current_room': room_id})
+        
+        # Уведомляем модератора
+        moderator_id = room['moderator']
+        bot.send_message(
+            moderator_id,
+            f"✅ Пользователь @{message.from_user.username} присоединился к комнате!"
+        )
+        
+        bot.send_message(user_id, f"✅ Вы присоединились к комнате {room_id}!")
+    except Exception as e:
+        print(f"Ошибка присоединения: {e}")
+        bot.send_message(user_id, "❌ Ошибка при присоединении. Попробуйте позже.")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'start_voting')
+def start_voting_handler(call):
+    """Запуск голосования (исправленная версия)"""
+    user_id = str(call.message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room.get('moderator') != user_id:
+        return bot.send_message(user_id, "❌ Только модератор может начать голосование!")
+    
+    # Явная инициализация структуры голосов
+    # При старте голосования
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.update({
+        'status': 'voting',
+        'votes': {},
+        'results': None,
+        'winner': None
+    })
+        
+    # Рассылка интерфейса с задержкой
+    members = room.get('members', {}).keys()
+    for member_id in members:
+        try:
+            send_voting_interface(member_id, room_id)
+        except Exception as e:
+            print(f"Ошибка отправки для {member_id}: {e}")
+
+def send_voting_interface(user_id: str, room_id: str):
+    """Отправка интерфейса голосования"""
+    room = get_room(room_id)
+    if not room:
+        return
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for rest in room.get('restaurants', []):
+        markup.add(types.KeyboardButton(rest))
+    
+    # Разные кнопки для модератора и участников
+    if room['moderator'] == user_id:
+        markup.add(types.KeyboardButton("Завершить голосование ✅"))
+    else:
+        markup.add(types.KeyboardButton("Изменить выбор 🔄"))
+    
+    bot.send_message(
+        user_id, 
+        "🗳 *Голосование началось!*\nВыберите ресторан из списка:",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(func=lambda message: message.text in MOCK_RESTAURANTS)
+def vote_handler(message):
+    """Обработка голосования с транзакциями"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    try:
+        # Получаем актуальные данные комнаты
+        room_ref = db.reference(f'/rooms/{room_id}')
+        room = room_ref.get()
+        
+        if not room or room.get('status') != 'voting':
+            return bot.send_message(user_id, "❌ Голосование не активно!")
+
+        # Транзакционное обновление голосов
+        def transaction_update(data):
+            if not data:
+                return None
+            
+            votes = data.get('votes', {})
+            votes[user_id] = message.text
+            data['votes'] = votes
+            return data
+
+        # Выполняем атомарное обновление
+        room_ref.transaction(transaction_update)
+        
+        # Подтверждение пользователю
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("Изменить выбор 🔄"))
+        bot.send_message(user_id, "✅ Ваш выбор учтен!", reply_markup=markup)
+        
+    except Exception as e:
+        print(f"Ошибка голосования: {e}")
+        bot.send_message(user_id, "❌ Ошибка сохранения голоса. Попробуйте еще раз.")
+
+@bot.message_handler(func=lambda message: message.text == "Изменить выбор 🔄")
+def change_vote_handler(message):
+    """Обработка изменения выбора"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room['status'] != 'voting':
+        return bot.send_message(user_id, "❌ Голосование не активно!")
+    
+    # Показываем клавиатуру с ресторанами
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for rest in room.get('restaurants', []):
+        markup.add(types.KeyboardButton(rest))
+    
+    if room['moderator'] == user_id:
+        markup.add(types.KeyboardButton("Завершить голосование ✅"))
+    
+    bot.send_message(
+        user_id, 
+        "Выберите новый вариант:",
+        reply_markup=markup
+    )
+
+@bot.message_handler(func=lambda message: message.text == "Завершить голосование ✅")
+
+def finish_voting_handler(message):
+    """Завершение голосования с проверкой данных"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    try:
+        room_ref = db.reference(f'/rooms/{room_id}')
+        room = room_ref.get()
+        
+        if not room or room['moderator'] != user_id:
+            return bot.send_message(user_id, "❌ Нет прав для завершения!")
+
+        votes = room.get('votes', {})
+        
+        # Форсированно получаем актуальные данные
+        votes_ref = db.reference(f'/rooms/{room_id}/votes')
+        actual_votes = votes_ref.get() or {}
+        
+        # Формируем результаты
+        results = defaultdict(int)
+        for rest in actual_votes.values():
+            results[rest] += 1
+            
+        # Определяем победителя
+        if not results:
+            winner = "❌ Никто не проголосовал"
+        else:
+            max_votes = max(results.values())
+            candidates = [rest for rest, v in results.items() if v == max_votes]
+            winner = random.choice(candidates) if len(candidates) > 1 else candidates[0]
+        
+        # Обновляем комнату
+        room_ref.update({
+            'status': 'completed',
+            'winner': winner,
+            'results': dict(results)
+        })
+        
+        # Рассылаем результаты
+        for member_id in room.get('members', {}):
+            try:
+                bot.send_message(member_id, 
+                    f"🏆 *Победитель:* {winner}\n\n" 
+                    f"*Детализация:*\n" + 
+                    "\n".join([f"▫️ {k}: {v}" for k,v in results.items()]),
+                    parse_mode="Markdown",
+                    reply_markup=types.ReplyKeyboardRemove()
+                )
+            except Exception as e:
+                print(f"Ошибка отправки {member_id}: {e}")
+                
+    except Exception as e:
+        print(f"Ошибка завершения: {e}")
+        bot.send_message(user_id, "❌ Ошибка обработки результатов")
+
+@bot.message_handler(func=lambda message: message.text == "Окончательно завершить голосование 🏁")
+def final_finish_handler(message):
+    """Окончательное завершение голосования"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    room = get_room(room_id)
+    if not room or room['moderator'] != user_id:
+        return bot.send_message(user_id, "❌ Только модератор может завершить голосование!")
+    
+    # Рассылаем финальное сообщение
+    members = room.get('members', {}).keys()
+    for member_id in members:
+        try:
+            bot.send_message(
+                member_id,
+                "🏁 Голосование окончательно завершено! Комитет закрыт.",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+        except Exception as e:
+            print(f"Ошибка отправки для {member_id}: {e}")
+    
+    # Обновляем статус комнаты
+    update_room(room_id, {'status': 'finalized'})
 
 # ------------------------ ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ------------------------
 
