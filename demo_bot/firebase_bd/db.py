@@ -59,7 +59,7 @@ def update_room_votes(room_id: str, votes: dict):
 def update_room_status(room_id: str, status: str):
     ref = db.reference(f'/rooms/{room_id}')
     ref.update({'status': status})
-    
+
 def generate_room_code():
     """Генерация 4-значного кода комнаты"""
     return str(random.randint(1000, 9999))
@@ -74,6 +74,17 @@ def create_room(room_data: dict, room_code):
     ref.child(room_code).set(room_data)
     
     return room_code
+
+def get_user_preferences(user_id: str) -> dict:
+    """Получение предпочтений пользователя"""
+    ref = db.reference(f'/users/{user_id}')
+    return ref.get() or {}
+
+def get_room_members(room_id: str) -> list:
+    """Получение списка участников комнаты"""
+    ref = db.reference(f'/rooms/{room_id}/members')
+    return list(ref.get().keys() or [])
+
 
 # def update_room_votes(room_id: str, rest: str, user_id: str):
 #     ref = db.reference(f'/rooms/{room_id}')
