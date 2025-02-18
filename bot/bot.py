@@ -276,7 +276,139 @@ def process_solo_cuisine(message):
 
 
 # ------------------------ ЛОГИКА КОМНАТ ---------------------------
+@bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
+def handle_create_room(message):
+    """Создание комнаты"""
+    user_id = str(message.chat.id)
+    
+    # Генерация уникального кода комнаты
+    room_code = str(random.randint(1000, 9999))
+    while get_room(room_code):
+        room_code = str(random.randint(1000, 9999))
+    
+    # Создаем комнату в Firebase
+    room_data = {
+        'moderator': user_id,
+        'members': {user_id: True},
+        'status': 'waiting',
+        'created_at': datetime.datetime.now().isoformat()
+    }
+    
+    create_room(room_data, room_code)
+    update_user(user_id, {'current_room': room_code})
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Подобрать рестораны", callback_data='start_recsys'))
+    
+    bot.send_message(
+        user_id, 
+        f"✅ Комната *{room_code}* создана!\n\n"
+        "Участники могут присоединиться с помощью кода.\n"
+        "Нажмите кнопку ниже чтобы подобрать рестораны.",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
 
+@bot.message_handler(func=lambda message: message.text == 'Присоединиться к комнате 👋🏻')
+def join_room_command(message):
+    """Присоединение к комнате"""
+    user_id = str(message.chat.id)
+    bot.send_message(user_id, "Введите 4-значный код комнаты:")
+    bot.register_next_step_handler(message, process_room_code)
+
+def process_room_code(message):
+    """Обработка кода комнаты"""
+    user_id = str(message.chat.id)
+    room_id = message.text.strip()
+
+    if not room_id.isdigit() or len(room_id) != 4:
+        return bot.send_message(user_id, "❌ Неверный формат кода!")
+
+    try:
+        room = get_room(room_id)
+        if not room:
+            return bot.send_message(user_id, "❌ Комната не найдена!")
+        
+        if user_id in room.get('members', {}):
+            return bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
+        
+        if room.get('status') != 'waiting':
+            return bot.send_message(user_id, "❌ Голосование уже началось!")
+
+        # Добавляем пользователя в комнату
+        add_user_to_room(room_id, user_id)
+        update_user(user_id, {'current_room': room_id})
+        
+        # Уведомляем модератора
+        moderator_id = room['moderator']
+        bot.send_message(
+            moderator_id,
+            f"✅ Пользователь @{message.from_user.username} присоединился к комнате!"
+        )
+        
+        bot.send_message(user_id, f"✅ Вы присоединились к комнате {room_id}!")
+    except Exception as e:
+        print(f"Ошибка присоединения: {e}")
+        bot.send_message(user_id, "❌ Ошибка при присоединении. Попробуйте позже.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'start_recsys')
+def get_recommendations_handler(call):
+    """Рассылка рекомендаций всем участникам"""
+    user_id = str(call.message.chat.id)
+    
+    try:
+        # Получаем данные пользователя
+        user_data = get_user(user_id)
+        if not user_data:
+            return bot.send_message(user_id, "❌ Ваши данные не найдены!")
+        
+        room_id = user_data.get('current_room')
+        if not room_id:
+            return bot.send_message(user_id, "❌ Вы не в комнате!")
+
+        # Проверяем права модератора
+        room = get_room(room_id)
+        if not room or room['moderator'] != user_id:
+            return bot.send_message(user_id, "❌ Только модератор может запустить подбор!")
+
+        # Получаем топ-5 ресторанов из MOCK данных
+        top_restaurants = list(MOCK_RESTAURANTS.values())[:5]
+        
+        if not top_restaurants:
+            return bot.send_message(user_id, "❌ Нет доступных ресторанов")
+# Формируем сообщение
+        response = "🍴 *Топ-5 рекомендованных ресторанов:*\n\n"
+        for idx, rest in enumerate(top_restaurants, 1):
+            response += (
+                f"{idx}. *{rest['name']}*\n"
+                f"   ★ Рейтинг: {rest['rating']}\n"
+                f"   💰 Средний чек: {rest['avg_price']} ₽\n"
+                f"   🕒 Время пути: {rest.get('route_duration', 'N/A')} мин\n"
+                f"   🍽 Кухня: {rest['cuisine']}\n\n"
+            )
+
+        # Получаем участников комнаты
+        members = room.get('members', {}).keys()
+        if not members:
+            return bot.send_message(user_id, "❌ В комнате нет участников")
+
+        # Рассылаем всем участникам
+        for member_id in members:
+            try:
+                bot.send_message(
+                    member_id,
+                    response,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Ошибка отправки для {member_id}: {e}")
+
+        bot.send_message(user_id, "✅ Рекомендации успешно отправлены всем участникам!")
+
+    except Exception as e:
+        print(f"Ошибка в рекомендательной системе: {e}")
+        bot.send_message(user_id, "❌ Произошла ошибка при формировании рекомендаций")
 # ------------------------ ЛОГИКА КОМНАТ ---------------------------
 @bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
 def handle_create_room(message):
