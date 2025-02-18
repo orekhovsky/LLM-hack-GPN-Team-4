@@ -10,22 +10,13 @@ import random
 import string
 from collections import defaultdict
 
-# Инициализация Firebase
 init_firebase()
 bot = telebot.TeleBot(config.token)
 
 # Хранилище состояния опроса (временное, пока не перенесем в Firebase)
 user_states = {}
 
-def get_room_keyboard():
-    """Генерация клавиатуры со списком комнат"""
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    rooms_ref = db.reference('/rooms')
-    all_rooms = rooms_ref.get() or {}
-    
-    for room_id in all_rooms.keys():
-        markup.add(types.KeyboardButton(f"Комната {room_id}"))
-    return markup if all_rooms else None
+# ------------------------ ОСНОВНЫЕ КОМАНДЫ ------------------------
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
@@ -53,13 +44,13 @@ def show_main_menu(user_id, user_data):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = types.KeyboardButton('Создать комнату 🏠')
     btn2 = types.KeyboardButton('Найти рестораны 🔍')
-    btn3 = types.KeyboardButton('Мои предпочтения �')
+    btn3 = types.KeyboardButton('Мои предпочтения 🍽')
     btn4 = types.KeyboardButton('Присоединиться к комнате 👋🏻')
     markup.add(btn1, btn2, btn3, btn4)
     
     text = ''' Как здорово снова встретиться с вами! Я — *Dorcia*, ваш помощник в выборе ресторанов. 🍽
 
-
+                                    *Ваш вкус- наш выбор*
     '''
         
     bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
@@ -89,6 +80,8 @@ def show_preferences(message):
         bot.send_message(user_id, result_text, reply_markup=markup)
     else:
         bot.send_message(user_id, "Вы еще не проходили опрос!")
+
+# ------------------------ ОПРОС ПОЛЬЗОВАТЕЛЯ ------------------------
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_quiz')
 def start_quiz(call):
@@ -151,7 +144,6 @@ def handle_answer(call):
     for cuisine in selected:
         state['cuisines'][cuisine] += 1
     
-    # Переход к следующему вопросу
     state['current_question'] += 1
     ask_question(user_id, state['current_question'])
 
@@ -198,268 +190,326 @@ def handle_menu_actions(call):
         ask_question(user_id, 0)
 
 
-@bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
-def handle_create_room(message):
-    """Обработчик кнопки 'Создать комнату'"""
-    create_room_command(message)
-
-@bot.message_handler(commands=['create_room'])
-def create_room_command(message):
-    """Создание новой комнаты"""
+# ======================= ОДИНОЧНЫЙ ПОИСК ==========================
+@bot.message_handler(func=lambda message: message.text == 'Найти рестораны 🔍')
+def handle_solo_search(message):
+    """Новая функция: запуск одиночного поиска"""
     user_id = str(message.chat.id)
-    room_data = {
-        "moderator": user_id,
-        "members": [user_id],
-        "status": "waiting",
-        "params": {},
-        "votes": {},
-        "restaurants": []
+    user_states[user_id] = {'mode': 'solo', 'step': 'price'}
+    ask_price_step(user_id)
+
+def ask_price_step(user_id):
+    """Запрос ценового диапазона"""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('До 500 ₽', '500-1000 ₽', 'Свыше 1000 ₽')
+    bot.send_message(user_id, "💸 Средний чек на человека:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'price')
+def process_solo_price(message):
+    """Обработка цены для одиночного поиска"""
+    user_id = str(message.chat.id)
+    price_map = {
+        'До 500 ₽': (0, 500),
+        '500-1000 ₽': (501, 1000),
+        'Свыше 1000 ₽': (1001, 5000)
     }
     
-    room_id = create_room(room_data)
-    update_user(user_id, {"current_room": room_id})
+    if message.text not in price_map:
+        bot.send_message(user_id, "❌ Выберите вариант из кнопок!")
+        return ask_price_step(user_id)
     
-    bot.send_message(user_id, f"✅ Комната {room_id} создана! Код для участников: *{room_id}*", 
+    user_states[user_id]['price'] = price_map[message.text]
+    user_states[user_id]['step'] = 'time'
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('<30 мин', '30-60 мин', '>1 часа')
+    bot.send_message(user_id, "⏳ Время на обед:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'time')
+def process_solo_time(message):
+    """Обработка времени для одиночного поиска"""
+    user_id = str(message.chat.id)
+    if message.text not in ['<30 мин', '30-60 мин', '>1 часа']:
+        bot.send_message(user_id, "❌ Выберите вариант из кнопок!")
+        return
+    
+    user_states[user_id]['time'] = message.text
+    user_states[user_id]['step'] = 'cuisine'
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('Итальянская', 'Японская', 'Кафе', 'Ресторан', 'Пиццерия', 'Другое')
+    bot.send_message(user_id, "🍽 Предпочтения по кухне/типу:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.chat.id), {}).get('step') == 'cuisine')
+def process_solo_cuisine(message):
+    """Обработка кухни и вывод результатов"""
+    user_id = str(message.chat.id)
+    cuisine = message.text
+    filters = user_states[user_id]
+    
+    # Фильтрация ресторанов
+    filtered = [
+        r for r in MOCK_RESTAURANTS 
+        if filters['price'][0] <= r['avg_price'] <= filters['price'][1]
+    ]
+    
+    if cuisine != 'Другое':
+        filtered = [r for r in filtered if cuisine.lower() in r['name'].lower()]
+    
+    if not filtered:
+        bot.send_message(user_id, "😞 По вашему запросу ничего не найдено")
+        return
+    
+    # Формирование сообщения с результатами
+    response = "🍴 Найденные рестораны:\n\n"
+    for i, rest in enumerate(filtered[:5], 1):
+        response += (
+            f"{i}. {rest['name']}\n"
+            f"   Средний чек: {rest['avg_price']} ₽\n"
+            f"   Рейтинг: {rest['rating']} ★\n\n"
+        )
+    
+    bot.send_message(user_id, response)
+
+# ------------------------ ЛОГИКА КОМНАТ ---------------------------
+
+@bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
+def handle_create_room(message):
+    """Создание комнаты"""
+    user_id = str(message.chat.id)
+    
+    # Генерация уникального кода комнаты
+    while True:
+        room_code = str(random.randint(1000, 9999))
+        if not get_room(room_code):
+            break
+    
+    # Создаем комнату в Firebase
+    room_data = {
+        'room_id': room_code,
+        'moderator': user_id,
+        'members': {user_id: True},
+        'status': 'waiting',
+        'votes': {},
+        'restaurants': [r['name'] for r in MOCK_RESTAURANTS]
+    }
+    
+    create_room(room_data, room_code)
+    update_user(user_id, {'current_room': room_code})
+    
+    bot.send_message(user_id, f"✅ Комната создана! Код для участников: *{room_code}*", 
                     parse_mode="Markdown")
-    ask_additional_params(user_id, room_id)
 
 @bot.message_handler(func=lambda message: message.text == 'Присоединиться к комнате 👋🏻')
 def join_room_command(message):
-    """Присоединение к комнате по 4-значному коду"""
+    """Присоединение к комнате"""
     user_id = str(message.chat.id)
     bot.send_message(user_id, "Введите 4-значный код комнаты:")
     bot.register_next_step_handler(message, process_room_code)
 
 def process_room_code(message):
-    """Обработка введенного кода комнаты"""
+    """Обработка кода комнаты"""
     user_id = str(message.chat.id)
-    room_code = message.text.strip()
+    room_id = message.text.strip()
     
     try:
-        # Проверка формата кода
-        if not room_code.isdigit() or len(room_code) != 4:
-            bot.send_message(user_id, "❌ Неверный формат кода! Код должен состоять из 4 цифр.")
-            return
-        
-        # Проверка существования комнаты
-        room = get_room(room_code)
+        # Проверка комнаты
+        room = get_room(room_id)
         if not room:
             bot.send_message(user_id, "❌ Комната не найдена!")
             return
         
         # Проверка, что пользователь уже не в комнате
-        if user_id in room.get('members', []):
+        if user_id in room.get('members', {}):
             bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
             return
         
         # Добавляем пользователя в комнату
-        add_user_to_room(room_code, user_id)
-        update_user(user_id, {"current_room": room_code})
-        
-        bot.send_message(user_id, f"✅ Вы присоединились к комнате с кодом {room_code}!")
-    except Exception as e:
-        bot.send_message(user_id, "❌ Произошла ошибка при присоединении к комнате. Попробуйте позже.")
-        print(f"Ошибка: {e}")
-
-
-def ask_additional_params(user_id: str, room_id: str):
-    """Запрос дополнительных параметров"""
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('До 500 ₽', '500-1000 ₽', 'Свыше 1000 ₽')
-    msg = bot.send_message(user_id, "💸 Средний чек на человека:", reply_markup=markup)
-    bot.register_next_step_handler(msg, lambda m: process_price_step(m, room_id))
-
-def process_price_step(message, room_id: str):
-    """Обработка выбора ценового диапазона"""
-    user_id = str(message.chat.id)
-    price = message.text.strip()
-    
-    # Проверка ввода
-    if price not in ['До 500 ₽', '500-1000 ₽', 'Свыше 1000 ₽']:
-        bot.send_message(user_id, "❌ Пожалуйста, выберите один из предложенных вариантов.")
-        return ask_additional_params(user_id, room_id)  # Повторный запрос
-    
-    try:
-        update_room(room_id, {f'params/{user_id}/price': price})
-        
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add('<30 мин', '30-60 мин', '>1 часа')
-        msg = bot.send_message(user_id, "⏳ Время на обед:", reply_markup=markup)
-        bot.register_next_step_handler(msg, lambda m: process_time_step(m, room_id))
-    except Exception as e:
-        bot.send_message(user_id, "❌ Произошла ошибка при сохранении данных. Попробуйте позже.")
-        print(f"Ошибка: {e}")
-
-def process_time_step(message, room_id: str):
-    """Обработка выбора времени и запуск голосования"""
-    user_id = str(message.chat.id)
-    time = message.text.strip()
-    
-    # Проверка ввода
-    if time not in ['<30 мин', '30-60 мин', '>1 часа']:
-        bot.send_message(user_id, "❌ Пожалуйста, выберите один из предложенных вариантов.")
-        return ask_additional_params(user_id, room_id)  # Повторный запрос
-    
-    try:
-        # Сохраняем время на обед
-        update_room(room_id, {f'params/{user_id}/time': time})
-        bot.send_message(user_id, "✅ Настройки сохранены!")
-        
-        # Отправляем кнопку "Готовы!"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Готовы!", callback_data=f"start_voting_{room_id}"))
-        bot.send_message(user_id, "Нажмите *Готовы!*, чтобы начать голосование.", reply_markup=markup, parse_mode="Markdown")
-    except Exception as e:
-        bot.send_message(user_id, "❌ Произошла ошибка при сохранении данных. Попробуйте позже.")
-        print(f"Ошибка: {e}")
-
-@bot.message_handler(func=lambda message: message.text.startswith("Комната"))
-def enter_room(message):
-    """Вход в комнату"""
-    user_id = str(message.chat.id)
-    room_id = message.text.split()[-1]
-    room = get_room(room_id)
-    
-    if not room:
-        bot.send_message(user_id, "❌ Комната не найдена!")
-        return
-    
-    if user_id not in room.get('members', []):
         add_user_to_room(room_id, user_id)
-        update_user(user_id, {"current_room": room_id})
-        bot.send_message(user_id, f"✅ Вы в комнате {room_id}!")
-    else:
-        bot.send_message(user_id, "ℹ️ Вы уже в этой комнате!")
+        update_user(user_id, {'current_room': room_id})
+        
+        bot.send_message(user_id, f"✅ Вы присоединились к комнате {room_id}!")
+    except Exception as e:
+        bot.send_message(user_id, "❌ Ошибка при присоединении. Попробуйте позже.")
+        print(f"Ошибка: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('start_voting_'))
-def start_voting(call):
-    room_id = call.data.split('_')[-1]
-    user_id = str(call.from_user.id)
-    room = get_room(room_id)
+def is_moderator(message):
+    room = get_room(str(message.chat.id))
+    return room.get('moderator') == str(message.from_user.id)
+
+@bot.message_handler(func=lambda msg: msg.text == "Начать голосование")
+def start_voting_handler(message):
+    """Запуск голосования"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)   
+    room_id = user_data.get('current_room')
     
-    # Проверка, что модератор в списке участников
-    if user_id not in room.get('members', []):
-        bot.answer_callback_query(call.id, "❌ Вы не в этой комнате!")
+    if not room_id:
+        bot.send_message(user_id, "❌ Вы не в комнате!")
         return
     
-    # Запуск голосования
+    # Обновляем статус комнаты
     update_room(room_id, {'status': 'voting'})
-    for uid in room.get('members', []):
+    
+    # Рассылаем интерфейс голосования
+    room = get_room(room_id)
+    for member_id in room.get('members', {}).keys():
         try:
-            send_voting_interface(uid, room_id)
+            send_voting_interface(member_id, room_id)
         except Exception as e:
-            print(f"Ошибка отправки для {uid}: {e}")
+            print(f"Ошибка отправки для {member_id}: {e}")
 
-def send_voting_interface(user_id: str, room_id: str, offset=0):
+def send_voting_interface(user_id: str, room_id: str):
     """Отправка интерфейса голосования"""
     room = get_room(room_id)
     if not room:
         return
     
-    markup = types.InlineKeyboardMarkup()
-    restaurants = room.get('restaurants', [])
-    votes = room.get('votes', {})
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for rest in room.get('restaurants', []):
+        markup.add(types.KeyboardButton(rest))
     
-    # Выводим топ-5 ресторанов (с учетом offset)
-    for rest in restaurants[offset:offset+5]:
-        vote_count = votes.get(rest, 0)
-        markup.add(types.InlineKeyboardButton(
-            f"{rest} ({vote_count})", 
-            callback_data=f"vote_{room_id}_{rest}"
-        ))
-    
-    # Если есть еще рестораны, добавляем кнопку "Пополнить список ➕"
-    if len(restaurants) > offset + 5:
-        markup.add(types.InlineKeyboardButton(
-            "Пополнить список ➕", 
-            callback_data=f"more_rest_{room_id}_{offset+5}"
-        ))
-    
-    try:
-        bot.send_message(user_id, "🏆 Голосование за рестораны:", reply_markup=markup)
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
+    bot.send_message(user_id, "🍽 Выберите ресторан:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('vote_'))
-@bot.callback_query_handler(func=lambda call: call.data.startswith('vote_'))
-def handle_vote(call):
+@bot.message_handler(func=lambda message: (
+    str(message.chat.id) in get_room().get('members', {}) and
+    get_room().get('members', {}).get(str(message.chat.id), '') in ['moderator', 'guest'] and
+    message.text in [r['name'] for r in MOCK_RESTAURANTS]
+))
+def vote_handler(message):
     """Обработка голосования"""
-    _, room_id, rest = call.data.split('_', 2)
-    user_id = str(call.from_user.id)
-    room = get_room(room_id)
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
     
-    if not room or user_id in room.get('voted', []):
-        bot.answer_callback_query(call.id, "❌ Вы уже голосовали!")
+    if not room_id:
+        bot.send_message(user_id, "❌ Вы не в комнате!")
         return
     
     # Обновляем голоса в Firebase
-    new_votes = room.get('votes', {})
-    new_votes[rest] = new_votes.get(rest, 0) + 1
-    update_room(room_id, {
-        'votes': new_votes,
-        'voted': firestore.ArrayUnion([user_id])
-    })
+    room = get_room(room_id)
+    votes = room.get('votes', {})
+    votes[user_id] = message.text
+    update_room(room_id, {'votes': votes})
     
-    # Обновляем интерфейс голосования для всех участников
-    for uid in room.get('members', []):
-        send_voting_interface(uid, room_id)
+    bot.send_message(user_id, "✅ Ваш голос учтен!", reply_markup=types.ReplyKeyboardRemove())
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('more_rest_'))
-def add_more_restaurants(call):
-    """Добавление следующих ресторанов в список"""
-    data = call.data.split('_')
-    room_id = data[2]
-    offset = int(data[3])  # Смещение для отображения следующих ресторанов
+@bot.message_handler(func=lambda message: (
+    str(message.chat.id) in get_room().get('members', {}) and
+    get_room().get('moderator') == str(message.chat.id) and
+    message.text == 'Завершить голосование'
+))
+# 📌 Меню закрытия комнаты
+def close_room_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("Закрыть комнату"))
+    return markup
+
+def finish_voting_handler(message):
+    """Завершение голосования"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
     
-    # Отправляем обновленный интерфейс голосования
-    send_voting_interface(call.from_user.id, room_id, offset)
+    if not room_id:
+        bot.send_message(user_id, "❌ Вы не в комнате!")
+        return
+    
+    # Подсчет результатов
+    room = get_room(room_id)
+    votes = room.get('votes', {})
+    
+    results = defaultdict(int)
+    for rest in votes.values():
+        results[rest] += 1
+    
+    # Формируем текст результатов
+    result_text = "📊 Результаты голосования:\n\n"
+    for rest, count in results.items():
+        result_text += f"{rest}: {count} голосов\n"
+    
+    # Рассылаем результаты
+    for member_id in room.get('members', {}).keys():
+        try:
+            bot.send_message(member_id, result_text)
+        except Exception as e:
+            print(f"Ошибка отправки для {member_id}: {e}")
+    
+    # Предлагаем модератору закрыть комнату
+    bot.send_message(user_id, "Вы можете закрыть комнату.", reply_markup=close_room_menu())
+
+@bot.message_handler(func=lambda message: (
+    str(message.chat.id) in get_room().get('members', {}) and
+    get_room().get('moderator') == str(message.chat.id) and
+    message.text == 'Закрыть комнату'
+))
+def close_room_handler(message):
+    """Закрытие комнаты"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        bot.send_message(user_id, "❌ Вы не в комнате!")
+        return
+    
+    # Удаляем комнату
+    delete_room(room_id)
+    
+    # Удаляем привязку к комнате у пользователей
+    room = get_room(room_id)
+    for member_id in room.get('members', {}).keys():
+        update_user(member_id, {'current_room': None})
+    
+    bot.send_message(user_id, "🚪 Комната закрыта!", reply_markup=show_main_menu())
+
+# ------------------------ ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ------------------------
+
 
 @bot.message_handler(commands=['info'])
 def info_command(message):
     '''Информация про функционал бота'''
     info_text = '''
-🔍 Основные функции бота:
+    🔍 Основные функции бота:
 
-- Опрос предпочтений
-- Совместный выбор ресторана
-- Голосование в реальном времени
+    - Опрос предпочтений
+    - Совместный выбор ресторана
+    - Голосование в реальном времени
 
-Как работает бот?
+    Как работает бот?
 
-1. Для одного:  
-   Если вы ищете место для себя, выберите опцию «Найти рестораны». Бот предложит вам список лучших заведений, соответствующих вашим предпочтениям. 
-   Вы сможете увидеть оценку, средний чек, время в пути и выбрать идеальный ресторан для посещения.
+    1. Для одного:  
+    Если вы ищете место для себя, выберите опцию «Найти рестораны».
+    Бот предложит вам список лучших заведений, соответствующих вашим предпочтениям. 
+    Вы сможете увидеть оценку, средний чек, время в пути и выбрать идеальный ресторан для посещения.
 
-2. Для компании:  
-   Если вы планируете поход в ресторан с друзьями или коллегами, доступны следующие варианты:
-   
-   - Создать новую комнату:  
-     Эта опция позволит вам организовать собственное мероприятие. 
-     Вы получите необходимые инструменты для приглашения гостей и координации встречи.
-     
-   - Присоединиться к комнате:  
-     Если уже создана комната, к которой вы хотите присоединиться, введите её код, чтобы стать частью встречи.
+    2. Для компании:  
+    Если вы планируете поход в ресторан с друзьями или коллегами, доступны следующие варианты:
+    
+    - Создать новую комнату:  
+        Эта опция позволит вам организовать собственное мероприятие. 
+        Вы получите необходимые инструменты для приглашения гостей и координации встречи.
+        
+    - Присоединиться к комнате:  
+        Если уже создана комната, к которой вы хотите присоединиться, введите её код, чтобы стать частью встречи.
 
-Изменение предпочтений:
+    Изменение предпочтений:
 
-Вы всегда можете изменить свои вкусовые предпочтения, чтобы получать более подходящие предложения от бота. 
-Для этого перейдите в раздел «Мои предпочтения» и выберите пункт «Пройти заново».
+    Вы всегда можете изменить свои вкусовые предпочтения, чтобы получать более подходящие предложения от бота. 
+    Для этого перейдите в раздел «Мои предпочтения» и выберите пункт «Пройти заново».
 
-'''
+    '''
     bot.send_message(message.chat.id, info_text)
 
-
-from telebot import types
-import config
 
 @bot.message_handler(commands=['feedback'])
 def feedback_command(message):
     '''Обратная связь'''
     feedback_text = '''
-Мы всегда рады услышать ваше мнение! 
-Если у вас есть идеи, пожелания или вы хотите выразить благодарность нашей команде, пожалуйста, оставьте свои комментарии ниже. 
-Мы ценим каждое мнение и стараемся сделать наш сервис лучше для вас! 😊
-'''
+    Мы всегда рады услышать ваше мнение! 
+    Если у вас есть идеи, пожелания или вы хотите выразить благодарность нашей команде, пожалуйста, оставьте свои комментарии ниже. 
+    Мы ценим каждое мнение и стараемся сделать наш сервис лучше для вас! 😊
+    '''
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("Отменить отправку ❌"))
     
@@ -506,14 +556,14 @@ def get_chat_id(message):
 def help_command(message):
     """Справка по командам"""
     help_text = """
-📌 Доступные команды:
-/start - Начать работу
-/help - Справка
-/create_room - Создать комнату
-/join_room - Присоединиться к комнате
-/info - Описание функционала бота
-/feedback - Обратная связь / Пожелания / Благодарности команде авторов
-"""
+    📌 Доступные команды:
+    /start - Начать работу
+    /help - Справка
+    /create_room - Создать комнату
+    /join_room - Присоединиться к комнате
+    /info - Описание функционала бота
+    /feedback - Обратная связь / Пожелания / Благодарности команде авторов
+    """
     bot.send_message(message.chat.id, help_text)
 
 if __name__ == '__main__':

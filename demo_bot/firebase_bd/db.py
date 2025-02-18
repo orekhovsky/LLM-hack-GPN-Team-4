@@ -54,24 +54,20 @@ def remove_user_from_room(room_id: str, user_id: str):
     if user_id in users:
         users.remove(user_id)
         ref.set(users)
-
+        
 def generate_room_code():
     """Генерация 4-значного кода комнаты"""
     return str(random.randint(1000, 9999))
 
-def create_room(room_data: dict):
+def create_room(room_data: dict, room_code):
     """Создание комнаты с 4-значным кодом"""
     ref = db.reference('/rooms')
+
+    room_data["members"] = {room_data["moderator"]: True}
     
-    # Генерация уникального 4-значного кода
-    while True:
-        room_code = generate_room_code()
-        if not ref.child(room_code).get():  # Проверяем, что код уникален
-            break
-    
-    room_code = generate_room_code()
-    room_data["members"] = [room_data["moderator"]]  # Добавляем модератора в участники
+    ref = db.reference('/rooms')
     ref.child(room_code).set(room_data)
+    
     return room_code
 
 def update_room_votes(room_id: str, rest: str, user_id: str):
@@ -91,3 +87,8 @@ def update_room_votes(room_id: str, rest: str, user_id: str):
         'votes': votes,
         'voted': voted
     })
+
+
+if __name__ == '__main__':
+    init_firebase()
+    print(get_room('4196'))
