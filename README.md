@@ -117,7 +117,7 @@
 
 ### 1. Клонируйте репозиторий
 bash
-git clone https://github.com/ваш-username/dorcia-bot.git
+git clone (https://github.com/orekhovsky/LLM-hack-GPN-Team-4)
 cd dorcia-bot 
 ### 2. Установите зависимости
 pip install -r requirements.txt
