@@ -3,6 +3,8 @@ from telebot import types
 from firebase_bd import *
 import firebase_admin
 from firebase_admin import firestore
+import pandas as pd
+from firebase_admin import db
 import config
 from qstns import questions, cuisines, MOCK_RESTAURANTS
 import datetime
@@ -191,6 +193,7 @@ def handle_menu_actions(call):
 
 
 # ======================= ОДИНОЧНЫЙ ПОИСК ==========================
+
 @bot.message_handler(func=lambda message: message.text == 'Найти рестораны 🔍')
 def handle_solo_search(message):
     """Новая функция: запуск одиночного поиска"""
@@ -274,6 +277,7 @@ def process_solo_cuisine(message):
 
 # ------------------------ ЛОГИКА КОМНАТ ---------------------------
 
+# ------------------------ ЛОГИКА КОМНАТ ---------------------------
 @bot.message_handler(func=lambda message: message.text == 'Создать комнату 🏠')
 def handle_create_room(message):
     """Создание комнаты"""
@@ -353,7 +357,7 @@ def process_room_code(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'start_voting')
 def start_voting_handler(call):
-    """Запуск голосования"""
+    """Запуск голосования (исправленная версия)"""
     user_id = str(call.message.chat.id)
     user_data = get_user(user_id)
     room_id = user_data.get('current_room')
@@ -362,13 +366,20 @@ def start_voting_handler(call):
         return bot.send_message(user_id, "❌ Вы не в комнате!")
     
     room = get_room(room_id)
-    if not room or room['moderator'] != user_id:
+    if not room or room.get('moderator') != user_id:
         return bot.send_message(user_id, "❌ Только модератор может начать голосование!")
     
-    # Обновляем статус комнаты
-    update_room(room_id, {'status': 'voting', 'votes': {}})
-    
-    # Рассылаем интерфейс голосования
+    # Явная инициализация структуры голосов
+    # При старте голосования
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.update({
+        'status': 'voting',
+        'votes': {},
+        'results': None,
+        'winner': None
+    })
+        
+    # Рассылка интерфейса с задержкой
     members = room.get('members', {}).keys()
     for member_id in members:
         try:
@@ -385,7 +396,12 @@ def send_voting_interface(user_id: str, room_id: str):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     for rest in room.get('restaurants', []):
         markup.add(types.KeyboardButton(rest))
-    markup.add(types.KeyboardButton("Завершить голосование ❌"))
+    
+    # Разные кнопки для модератора и участников
+    if room['moderator'] == user_id:
+        markup.add(types.KeyboardButton("Завершить голосование ✅"))
+    else:
+        markup.add(types.KeyboardButton("Изменить выбор 🔄"))
     
     bot.send_message(
         user_id, 
@@ -396,7 +412,47 @@ def send_voting_interface(user_id: str, room_id: str):
 
 @bot.message_handler(func=lambda message: message.text in MOCK_RESTAURANTS)
 def vote_handler(message):
-    """Обработка голосования"""
+    """Обработка голосования с транзакциями"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    if not room_id:
+        return bot.send_message(user_id, "❌ Вы не в комнате!")
+    
+    try:
+        # Получаем актуальные данные комнаты
+        room_ref = db.reference(f'/rooms/{room_id}')
+        room = room_ref.get()
+        
+        if not room or room.get('status') != 'voting':
+            return bot.send_message(user_id, "❌ Голосование не активно!")
+
+        # Транзакционное обновление голосов
+        def transaction_update(data):
+            if not data:
+                return None
+            
+            votes = data.get('votes', {})
+            votes[user_id] = message.text
+            data['votes'] = votes
+            return data
+
+        # Выполняем атомарное обновление
+        room_ref.transaction(transaction_update)
+        
+        # Подтверждение пользователю
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("Изменить выбор 🔄"))
+        bot.send_message(user_id, "✅ Ваш выбор учтен!", reply_markup=markup)
+        
+    except Exception as e:
+        print(f"Ошибка голосования: {e}")
+        bot.send_message(user_id, "❌ Ошибка сохранения голоса. Попробуйте еще раз.")
+
+@bot.message_handler(func=lambda message: message.text == "Изменить выбор 🔄")
+def change_vote_handler(message):
+    """Обработка изменения выбора"""
     user_id = str(message.chat.id)
     user_data = get_user(user_id)
     room_id = user_data.get('current_room')
@@ -408,16 +464,81 @@ def vote_handler(message):
     if not room or room['status'] != 'voting':
         return bot.send_message(user_id, "❌ Голосование не активно!")
     
-    # Обновляем голоса в Firebase
-    votes = room.get('votes', {})
-    votes[user_id] = message.text
-    update_room(room_id, {'votes': votes})
+    # Показываем клавиатуру с ресторанами
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for rest in room.get('restaurants', []):
+        markup.add(types.KeyboardButton(rest))
     
-    bot.send_message(user_id, "✅ Ваш голос учтен!")
+    if room['moderator'] == user_id:
+        markup.add(types.KeyboardButton("Завершить голосование ✅"))
+    
+    bot.send_message(
+        user_id, 
+        "Выберите новый вариант:",
+        reply_markup=markup
+    )
 
-@bot.message_handler(func=lambda message: message.text == "Завершить голосование ❌")
+@bot.message_handler(func=lambda message: message.text == "Завершить голосование ✅")
+
 def finish_voting_handler(message):
-    """Завершение голосования"""
+    """Завершение голосования с проверкой данных"""
+    user_id = str(message.chat.id)
+    user_data = get_user(user_id)
+    room_id = user_data.get('current_room')
+    
+    try:
+        room_ref = db.reference(f'/rooms/{room_id}')
+        room = room_ref.get()
+        
+        if not room or room['moderator'] != user_id:
+            return bot.send_message(user_id, "❌ Нет прав для завершения!")
+
+        votes = room.get('votes', {})
+        
+        # Форсированно получаем актуальные данные
+        votes_ref = db.reference(f'/rooms/{room_id}/votes')
+        actual_votes = votes_ref.get() or {}
+        
+        # Формируем результаты
+        results = defaultdict(int)
+        for rest in actual_votes.values():
+            results[rest] += 1
+            
+        # Определяем победителя
+        if not results:
+            winner = "❌ Никто не проголосовал"
+        else:
+            max_votes = max(results.values())
+            candidates = [rest for rest, v in results.items() if v == max_votes]
+            winner = random.choice(candidates) if len(candidates) > 1 else candidates[0]
+        
+        # Обновляем комнату
+        room_ref.update({
+            'status': 'completed',
+            'winner': winner,
+            'results': dict(results)
+        })
+        
+        # Рассылаем результаты
+        for member_id in room.get('members', {}):
+            try:
+                bot.send_message(member_id, 
+                    f"🏆 *Победитель:* {winner}\n\n" 
+                    f"*Детализация:*\n" + 
+                    "\n".join([f"▫️ {k}: {v}" for k,v in results.items()]),
+                    parse_mode="Markdown",
+                    reply_markup=types.ReplyKeyboardRemove()
+                )
+            except Exception as e:
+                print(f"Ошибка отправки {member_id}: {e}")
+                
+    except Exception as e:
+        print(f"Ошибка завершения: {e}")
+        bot.send_message(user_id, "❌ Ошибка обработки результатов")
+
+@bot.message_handler(func=lambda message: message.text == "Окончательно завершить голосование 🏁")
+def final_finish_handler(message):
+    """Окончательное завершение голосования"""
     user_id = str(message.chat.id)
     user_data = get_user(user_id)
     room_id = user_data.get('current_room')
@@ -429,60 +550,21 @@ def finish_voting_handler(message):
     if not room or room['moderator'] != user_id:
         return bot.send_message(user_id, "❌ Только модератор может завершить голосование!")
     
-    # Подсчет результатов
-    votes = room.get('votes', {})
-    results = defaultdict(int)
-    for rest in votes.values():
-        results[rest] += 1
-    
-    # Формируем текст результатов
-    result_text = "📊 *Результаты голосования:*\n\n"
-    for rest, count in sorted(results.items(), key=lambda x: x[1], reverse=True):
-        result_text += f"🍽 *{rest}* — {count} голосов\n"
-    
-    # Рассылаем результаты
+    # Рассылаем финальное сообщение
     members = room.get('members', {}).keys()
     for member_id in members:
         try:
             bot.send_message(
-                member_id, 
-                result_text + "\nКомната автоматически закрывается через 2 минуты.",
-                parse_mode="Markdown"
+                member_id,
+                "🏁 Голосование окончательно завершено! Комитет закрыт.",
+                reply_markup=types.ReplyKeyboardRemove()
             )
         except Exception as e:
             print(f"Ошибка отправки для {member_id}: {e}")
     
-    # Закрываем комнату через 2 минуты
-    close_room_with_delay(room_id)
+    # Обновляем статус комнаты
+    update_room(room_id, {'status': 'finalized'})
 
-def close_room_with_delay(room_id: str):
-    """Закрытие комнаты с задержкой"""
-    import threading
-    from time import sleep
-    
-    def closer():
-        sleep(120)
-        room = get_room(room_id)
-        if not room:
-            return
-        
-        # Удаляем комнату
-        delete_room(room_id)
-        
-        # Удаляем привязку к комнате у пользователей
-        members = room.get('members', {}).keys()
-        for member_id in members:
-            update_user(member_id, {'current_room': None})
-        
-        # Уведомляем участников
-        for member_id in members:
-            try:
-                bot.send_message(member_id, "🚪 Комната автоматически закрыта!")
-            except Exception as e:
-                print(f"Ошибка уведомления {member_id}: {e}")
-    
-    thread = threading.Thread(target=closer)
-    thread.start()
 # ------------------------ ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ------------------------
 
 

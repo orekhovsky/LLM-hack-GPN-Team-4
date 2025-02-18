@@ -56,6 +56,10 @@ def update_room_votes(room_id: str, votes: dict):
     ref = db.reference(f'/rooms/{room_id}')
     ref.update({'votes': votes})
 
+def update_room_status(room_id: str, status: str):
+    ref = db.reference(f'/rooms/{room_id}')
+    ref.update({'status': status})
+    
 def generate_room_code():
     """Генерация 4-значного кода комнаты"""
     return str(random.randint(1000, 9999))
@@ -88,8 +92,3 @@ def create_room(room_data: dict, room_code):
 #         'votes': votes,
 #         'voted': voted
 #     })
-
-
-if __name__ == '__main__':
-    init_firebase()
-    print(get_room('4196'))
